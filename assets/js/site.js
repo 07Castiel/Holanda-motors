@@ -3,6 +3,10 @@
  * Lê tudo através de HM (data.js): veículos, configurações da loja etc.
  * Qualquer alteração salva pelo painel do gestor (admin.html) aparece
  * aqui na próxima vez que a página for carregada.
+ *
+ * Config e veículos são buscados uma vez no carregamento da página e
+ * mantidos em cache local (cfg / vehiclesCache) — os filtros e o modal
+ * de detalhes trabalham em cima desse cache, sem refazer requisições.
  */
 (function () {
   'use strict';
@@ -10,7 +14,8 @@
   const badgeClass = { destaque: 'badge-destaque', seminovo: 'badge-seminovo', consignado: 'badge-consignado' };
   const badgeLabel = { destaque: 'Destaque', seminovo: 'Seminovo', consignado: 'Consignado' };
 
-  const cfg = HM.getConfig();
+  let cfg = null;
+  let vehiclesCache = [];
   let currentFilter = 'todos';
   let lastFocusedEl = null;
 
@@ -59,10 +64,9 @@
   function renderHero() {
     const wrap = document.getElementById('heroVisual');
     if (!cfg.hero) { wrap.style.display = 'none'; return; }
-    const vehicles = HM.getVehicles().filter(v => v.ativo);
+    const vehicles = vehiclesCache.filter(v => v.ativo);
     if (!vehicles.length) { wrap.style.display = 'none'; return; }
     const featured = vehicles.find(v => v.badge === 'destaque') || vehicles[0];
-    const wppMsg = `Olá! Vi o ${featured.make} ${featured.model} no site da Holanda Motors e gostaria de saber mais!`;
     wrap.innerHTML = `
       <div class="hero-car-card">
         <div class="hero-car-img">
@@ -89,7 +93,7 @@
 
   /* ── CATÁLOGO ── */
   function getVisibleVehicles() {
-    let list = HM.getVehicles().filter(v => v.ativo);
+    let list = vehiclesCache.filter(v => v.ativo);
     if (cfg.nophoto) list = list.filter(v => v.img);
     return list;
   }
@@ -142,7 +146,7 @@
     // Delegação de evento cobriria isso também, mas os cards são recriados
     // a cada render — então religamos os botões de detalhe aqui.
     grid.querySelectorAll('[data-detail]').forEach(btn => {
-      btn.addEventListener('click', () => openModal(Number(btn.dataset.detail), btn));
+      btn.addEventListener('click', () => openModal(btn.dataset.detail, btn));
     });
   }
 
@@ -155,7 +159,7 @@
 
   /* ── MODAL DE DETALHES (acessível: foco preso, ESC fecha, foco retorna ao gatilho) ── */
   function openModal(id, triggerEl) {
-    const v = HM.getVehicles().find(x => x.id === id);
+    const v = vehiclesCache.find(x => x.id === id);
     if (!v) return;
     lastFocusedEl = triggerEl || document.activeElement;
 
@@ -238,7 +242,19 @@
   });
 
   /* ── INIT ── */
-  applyConfig();
-  renderHero();
-  renderVehicles();
+  (async function init() {
+    try {
+      [cfg, vehiclesCache] = await Promise.all([HM.getConfig(), HM.getVehicles()]);
+    } catch (err) {
+      console.error('[site] Falha ao carregar dados da loja.', err);
+      document.getElementById('vehiclesGrid').innerHTML = `
+        <div class="vehicles-empty">
+          <p>Não foi possível carregar o estoque no momento. Tente novamente em instantes.</p>
+        </div>`;
+      return;
+    }
+    applyConfig();
+    renderHero();
+    renderVehicles();
+  })();
 })();

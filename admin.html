@@ -22,16 +22,16 @@
     </div>
     <span class="login-badge">Painel do Gestor</span>
     <div class="form-group">
-      <label for="loginUser">Usuário</label>
-      <input type="text" id="loginUser" placeholder="admin" autocomplete="username">
+      <label for="loginUser">E-mail</label>
+      <input type="email" id="loginUser" placeholder="seu@email.com" autocomplete="username" required>
     </div>
     <div class="form-group">
       <label for="loginPass">Senha</label>
-      <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password">
+      <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password" required>
     </div>
     <p class="login-error" id="loginError" role="alert"></p>
     <button type="submit" class="btn-login">Entrar no painel</button>
-    <p class="login-hint">Credenciais padrão: admin / holanda2026</p>
+    <p class="login-hint">Acesso restrito a administradores cadastrados no Supabase — veja o README.</p>
   </form>
 </div>
 
@@ -227,7 +227,7 @@
               <p class="field-error" id="passError" role="alert"></p>
               <button class="btn-secondary" style="width:100%;justify-content:center" id="changePassBtn">Alterar senha</button>
               <p class="login-hint" style="margin-top:12px">
-                ⚠ Este login é uma proteção simples do lado do cliente, pensada para uma demonstração — não trata dados sensíveis nem substitui autenticação de verdade em produção. Veja o README.
+                A senha é alterada na sua conta do Supabase Auth. Para adicionar outro administrador, veja "Como adicionar novos administradores" no README.
               </p>
             </div>
           </div>
@@ -371,6 +371,8 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="assets/js/supabase-client.js"></script>
 <script src="assets/js/data.js"></script>
 <script src="assets/js/admin.js"></script>
 </body>

@@ -1,7 +1,8 @@
 /**
  * admin.js — lógica do painel do gestor (admin.html)
- * Toda leitura/escrita de dados passa por HM (data.js), a mesma
- * camada usada pelo site público — é isso que mantém os dois em sincronia.
+ * Toda leitura/escrita de dados passa por HM (data.js), a mesma camada
+ * usada pelo site público. HM fala com o Supabase — autenticação real
+ * (Supabase Auth), banco (Postgres com RLS) e fotos (Supabase Storage).
  */
 (function () {
   'use strict';
@@ -15,36 +16,51 @@
   let lastFocusedEl = null;
   let pendingDelete = { type: null, id: null };
 
-  /* ── AUTENTICAÇÃO ──
-   * Aviso de transparência: esta é uma autenticação client-side simples,
-   * adequada para uma demonstração local. Como não há backend, qualquer
-   * pessoa com acesso ao arquivo pode inspecionar o código-fonte — não
-   * trate isso como segurança real em produção (ver README). */
-  document.getElementById('loginForm').addEventListener('submit', e => {
+  /* ── AUTENTICAÇÃO (Supabase Auth) ── */
+  document.getElementById('loginForm').addEventListener('submit', async e => {
     e.preventDefault();
-    const u = document.getElementById('loginUser').value.trim().toLowerCase();
-    const p = document.getElementById('loginPass').value;
+    const email = document.getElementById('loginUser').value.trim();
+    const pass = document.getElementById('loginPass').value;
     const errEl = document.getElementById('loginError');
-    if ((u === 'admin' || u === 'holanda') && p === HM.getPass()) {
-      errEl.textContent = '';
-      document.getElementById('loginScreen').style.display = 'none';
-      document.getElementById('adminApp').style.display = 'block';
-      renderDashboard();
-      renderVehicleTable();
-      renderConsigTable();
-      loadConfigForm();
-      checkMobile();
-    } else {
-      errEl.textContent = 'Usuário ou senha incorretos.';
+    const submitBtn = e.currentTarget.querySelector('button[type="submit"]');
+    errEl.textContent = '';
+    submitBtn.disabled = true;
+    try {
+      await HM.login(email, pass);
+      await enterAdminApp();
+    } catch (err) {
+      console.error('[admin] Falha no login.', err);
+      errEl.textContent = 'E-mail ou senha incorretos.';
+    } finally {
+      submitBtn.disabled = false;
     }
   });
 
-  document.getElementById('logoutBtn').addEventListener('click', () => {
+  document.getElementById('logoutBtn').addEventListener('click', async () => {
+    await HM.logout();
+    showLoginScreen();
+  });
+
+  async function enterAdminApp() {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('adminApp').style.display = 'block';
+    await Promise.all([renderDashboard(), renderVehicleTable(), renderConsigTable(), loadConfigForm()]);
+    checkMobile();
+  }
+
+  function showLoginScreen() {
     document.getElementById('adminApp').style.display = 'none';
     document.getElementById('loginScreen').style.display = 'flex';
     document.getElementById('loginForm').reset();
     document.getElementById('loginError').textContent = '';
-  });
+  }
+
+  /** Ao carregar a página, mantém a sessão se o gestor já estiver autenticado. */
+  (async function initSession() {
+    const session = await HM.getSession();
+    if (session) await enterAdminApp();
+    else showLoginScreen();
+  })();
 
   /* ── NAVEGAÇÃO ── */
   const titles = { dashboard: 'Dashboard', veiculos: 'Veículos', consignacoes: 'Consignações', configuracoes: 'Configurações' };
@@ -79,9 +95,8 @@
   window.addEventListener('resize', () => { if (window.innerWidth >= 900) closeSidebar(); });
 
   /* ── DASHBOARD ── */
-  function renderDashboard() {
-    const vs = HM.getVehicles();
-    const cs = HM.getConsigs();
+  async function renderDashboard() {
+    const [vs, cs] = await Promise.all([HM.getVehicles(), HM.getConsigs()]);
     const ativos = vs.filter(v => v.ativo);
     const carros = vs.filter(v => v.tipo === 'carro');
     const motos = vs.filter(v => v.tipo === 'moto');
@@ -103,7 +118,7 @@
       <div class="type-bar"><div class="type-bar-label">Destaque</div><div class="type-bar-track"><div class="type-bar-fill" style="width:${pct(destaque.length)}%;background:var(--blue)"></div></div><div class="type-bar-count">${destaque.length}</div></div>
     `;
 
-    const acts = HM.getActivity();
+    const acts = await HM.getActivity();
     const colors = { verde: 'var(--green)', amarelo: 'var(--yellow)', vermelho: 'var(--red)', azul: 'var(--blue)' };
     document.getElementById('activityList').innerHTML = acts.length
       ? acts.slice(0, 8).map(a => `<li class="activity-item"><span class="activity-dot" style="background:${colors[a.color] || 'var(--gray)'}"></span><span>${escapeHtml(a.msg)}</span><span class="activity-time">${a.time}</span></li>`).join('')
@@ -121,8 +136,15 @@
   document.getElementById('filterTipo').addEventListener('change', renderVehicleTable);
   document.getElementById('filterBadge').addEventListener('change', renderVehicleTable);
 
-  function renderVehicleTable() {
-    const vs = HM.getVehicles();
+  async function renderVehicleTable() {
+    let vs;
+    try {
+      vs = await HM.getVehicles();
+    } catch (err) {
+      console.error('[admin] Falha ao carregar veículos.', err);
+      toast('Não foi possível carregar os veículos.', 'error');
+      return;
+    }
     const q = (document.getElementById('searchVehicle').value || '').toLowerCase();
     const ft = document.getElementById('filterTipo').value;
     const fb = document.getElementById('filterBadge').value;
@@ -160,21 +182,24 @@
       </tr>
     `).join('');
 
-    tbody.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', () => toggleVisible(Number(b.dataset.toggle))));
-    tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openVehicleModal(Number(b.dataset.edit), b)));
-    tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => confirmDelete('vehicle', Number(b.dataset.del), b.dataset.label, b)));
+    tbody.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', () => toggleVisible(b.dataset.toggle, vs)));
+    tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openVehicleModal(b.dataset.edit, b, vs)));
+    tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => confirmDelete('vehicle', b.dataset.del, b.dataset.label, b)));
   }
 
-  function toggleVisible(id) {
-    const vs = HM.getVehicles();
-    const v = vs.find(x => x.id === id);
+  async function toggleVisible(id, cachedList) {
+    const v = cachedList.find(x => x.id === id);
     if (!v) return;
-    v.ativo = v.ativo ? 0 : 1;
-    HM.saveVehicles(vs);
-    renderVehicleTable();
-    renderDashboard();
-    HM.logActivity(`${v.make} ${v.model} ${v.ativo ? 'exibido' : 'ocultado'} no site`, v.ativo ? 'verde' : 'amarelo');
-    toast(v.ativo ? 'Veículo exibido no site.' : 'Veículo ocultado do site.', 'success');
+    const novoAtivo = !v.ativo;
+    try {
+      await HM.toggleVehicleAtivo(id, novoAtivo);
+      await HM.logActivity(`${v.make} ${v.model} ${novoAtivo ? 'exibido' : 'ocultado'} no site`, novoAtivo ? 'verde' : 'amarelo');
+      await Promise.all([renderVehicleTable(), renderDashboard()]);
+      toast(novoAtivo ? 'Veículo exibido no site.' : 'Veículo ocultado do site.', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao alterar visibilidade.', err);
+      toast('Não foi possível alterar a visibilidade do veículo.', 'error');
+    }
   }
 
   /* ── MODAL DE VEÍCULO ── */
@@ -187,7 +212,7 @@
   document.getElementById('vehicleSaveBtn').addEventListener('click', saveVehicle);
   vehicleOverlay.addEventListener('click', e => { if (e.target === e.currentTarget) closeVehicleModal(); });
 
-  function openVehicleModal(id, triggerEl) {
+  async function openVehicleModal(id, triggerEl, cachedList) {
     currentImg = '';
     lastFocusedEl = triggerEl || document.activeElement;
     document.getElementById('vehicleFormError').textContent = '';
@@ -201,7 +226,8 @@
     resetImgUpload();
 
     if (id) {
-      const v = HM.getVehicles().find(x => x.id === id);
+      const list = cachedList || await HM.getVehicles();
+      const v = list.find(x => x.id === id);
       if (!v) return;
       document.getElementById('vId').value = v.id;
       document.getElementById('vMake').value = v.make;
@@ -216,16 +242,13 @@
       document.getElementById('vCambio').value = v.cambio || 'Automático';
       document.getElementById('vCombustivel').value = v.combustivel || 'Flex';
       document.getElementById('vAtivo').value = v.ativo ? '1' : '0';
-      if (v.img) {
-        if (v.img.startsWith('data:')) { currentImg = v.img; showImgPreview(v.img); }
-        else { document.getElementById('vImgUrl').value = v.img; }
-      }
+      if (v.img) document.getElementById('vImgUrl').value = v.img;
     }
     openModal(vehicleOverlay, document.getElementById('vMake'));
   }
   function closeVehicleModal() { closeModalEl(vehicleOverlay); resetImgUpload(); }
 
-  function saveVehicle() {
+  async function saveVehicle() {
     const make = document.getElementById('vMake').value.trim();
     const model = document.getElementById('vModel').value.trim();
     const year = Number(document.getElementById('vYear').value);
@@ -249,7 +272,6 @@
 
     const imgUrl = document.getElementById('vImgUrl').value.trim();
     const img = currentImg || imgUrl || '';
-    const vs = HM.getVehicles();
     const editId = document.getElementById('vId').value;
     const data = {
       make, model, year, km: Number(km), price,
@@ -263,27 +285,26 @@
       desc: document.getElementById('vDesc').value.trim(),
     };
 
-    // Só um veículo pode ser "Destaque" por vez — é ele que aparece no hero
-    // do site. Marcar um novo desmarca automaticamente o anterior, senão o
-    // hero sempre mostraria o primeiro da lista e o gestor não veria efeito.
-    if (data.badge === 'destaque') {
-      vs.forEach(v => { if (v.badge === 'destaque' && String(v.id) !== editId) v.badge = 'seminovo'; });
+    const saveBtn = document.getElementById('vehicleSaveBtn');
+    saveBtn.disabled = true;
+    try {
+      if (editId) {
+        await HM.updateVehicle(editId, data);
+        await HM.logActivity(`${make} ${model} atualizado`, 'azul');
+        toast('Veículo atualizado com sucesso!', 'success');
+      } else {
+        await HM.createVehicle(data);
+        await HM.logActivity(`${make} ${model} adicionado ao estoque`, 'verde');
+        toast('Veículo adicionado com sucesso!', 'success');
+      }
+      await Promise.all([renderVehicleTable(), renderDashboard()]);
+      closeVehicleModal();
+    } catch (err) {
+      console.error('[admin] Falha ao salvar veículo.', err);
+      errEl.textContent = 'Não foi possível salvar o veículo. Tente novamente.';
+    } finally {
+      saveBtn.disabled = false;
     }
-
-    if (editId) {
-      const idx = vs.findIndex(v => v.id == editId);
-      if (idx !== -1) vs[idx] = { ...vs[idx], ...data };
-      HM.logActivity(`${make} ${model} atualizado`, 'azul');
-      toast('Veículo atualizado com sucesso!', 'success');
-    } else {
-      vs.push({ id: Date.now(), ...data });
-      HM.logActivity(`${make} ${model} adicionado ao estoque`, 'verde');
-      toast('Veículo adicionado com sucesso!', 'success');
-    }
-    HM.saveVehicles(vs);
-    renderVehicleTable();
-    renderDashboard();
-    closeVehicleModal();
   }
 
   /* ── UPLOAD DE IMAGEM ── */
@@ -338,8 +359,15 @@
   }
 
   /* ── TABELA DE CONSIGNAÇÕES ── */
-  function renderConsigTable() {
-    const cs = HM.getConsigs();
+  async function renderConsigTable() {
+    let cs;
+    try {
+      cs = await HM.getConsigs();
+    } catch (err) {
+      console.error('[admin] Falha ao carregar consignações.', err);
+      toast('Não foi possível carregar as consignações.', 'error');
+      return;
+    }
     const tbody = document.getElementById('consigTableBody');
     if (!cs.length) {
       tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p>Nenhuma consignação registrada.</p></div></td></tr>`;
@@ -366,8 +394,8 @@
       </tr>
     `).join('');
 
-    tbody.querySelectorAll('[data-cedit]').forEach(b => b.addEventListener('click', () => openConsigModal(Number(b.dataset.cedit), b)));
-    tbody.querySelectorAll('[data-cdel]').forEach(b => b.addEventListener('click', () => confirmDelete('consig', Number(b.dataset.cdel), b.dataset.label, b)));
+    tbody.querySelectorAll('[data-cedit]').forEach(b => b.addEventListener('click', () => openConsigModal(b.dataset.cedit, b, cs)));
+    tbody.querySelectorAll('[data-cdel]').forEach(b => b.addEventListener('click', () => confirmDelete('consig', b.dataset.cdel, b.dataset.label, b)));
   }
 
   /* ── MODAL DE CONSIGNAÇÃO ── */
@@ -378,7 +406,7 @@
   document.getElementById('consigSaveBtn').addEventListener('click', saveConsig);
   consigOverlay.addEventListener('click', e => { if (e.target === e.currentTarget) closeConsigModal(); });
 
-  function openConsigModal(id, triggerEl) {
+  async function openConsigModal(id, triggerEl, cachedList) {
     lastFocusedEl = triggerEl || document.activeElement;
     document.getElementById('consigFormError').textContent = '';
     ['cId', 'cOwner', 'cContact', 'cVehicle', 'cPlate', 'cValue', 'cNotes', 'cCommission'].forEach(f => { document.getElementById(f).value = ''; });
@@ -386,7 +414,8 @@
     document.getElementById('cStatus').value = 'ativo';
     document.getElementById('consigModalTitle').textContent = id ? 'Editar Consignação' : 'Registrar Consignação';
     if (id) {
-      const c = HM.getConsigs().find(x => x.id === id);
+      const list = cachedList || await HM.getConsigs();
+      const c = list.find(x => x.id === id);
       if (!c) return;
       document.getElementById('cId').value = c.id;
       document.getElementById('cOwner').value = c.owner;
@@ -403,7 +432,7 @@
   }
   function closeConsigModal() { closeModalEl(consigOverlay); }
 
-  function saveConsig() {
+  async function saveConsig() {
     const owner = document.getElementById('cOwner').value.trim();
     const contact = document.getElementById('cContact').value.trim();
     const vehicle = document.getElementById('cVehicle').value.trim();
@@ -413,7 +442,6 @@
       return;
     }
     errEl.textContent = '';
-    const cs = HM.getConsigs();
     const editId = document.getElementById('cId').value;
     const data = {
       owner, contact, vehicle,
@@ -424,20 +452,27 @@
       commission: document.getElementById('cCommission').value.trim(),
       notes: document.getElementById('cNotes').value.trim(),
     };
-    if (editId) {
-      const idx = cs.findIndex(c => c.id == editId);
-      if (idx !== -1) cs[idx] = { ...cs[idx], ...data };
-      HM.logActivity(`Consignação de ${owner} atualizada`, 'azul');
-      toast('Consignação atualizada!', 'success');
-    } else {
-      cs.push({ id: Date.now(), ...data });
-      HM.logActivity(`Nova consignação: ${vehicle} de ${owner}`, 'verde');
-      toast('Consignação registrada!', 'success');
+
+    const saveBtn = document.getElementById('consigSaveBtn');
+    saveBtn.disabled = true;
+    try {
+      if (editId) {
+        await HM.updateConsig(editId, data);
+        await HM.logActivity(`Consignação de ${owner} atualizada`, 'azul');
+        toast('Consignação atualizada!', 'success');
+      } else {
+        await HM.createConsig(data);
+        await HM.logActivity(`Nova consignação: ${vehicle} de ${owner}`, 'verde');
+        toast('Consignação registrada!', 'success');
+      }
+      await Promise.all([renderConsigTable(), renderDashboard()]);
+      closeConsigModal();
+    } catch (err) {
+      console.error('[admin] Falha ao salvar consignação.', err);
+      errEl.textContent = 'Não foi possível salvar a consignação. Tente novamente.';
+    } finally {
+      saveBtn.disabled = false;
     }
-    HM.saveConsigs(cs);
-    renderConsigTable();
-    renderDashboard();
-    closeConsigModal();
   }
 
   /* ── EXCLUSÃO (modal de confirmação compartilhado) ── */
@@ -456,26 +491,35 @@
     closeModalEl(confirmOverlay);
     pendingDelete = { type: null, id: null };
   }
-  function executeDelete() {
+  async function executeDelete() {
     const { type, id } = pendingDelete;
-    if (type === 'vehicle') {
-      HM.saveVehicles(HM.getVehicles().filter(v => v.id !== id));
-      renderVehicleTable();
-      HM.logActivity('Veículo excluído do estoque', 'vermelho');
-      toast('Veículo excluído.', 'success');
-    } else if (type === 'consig') {
-      HM.saveConsigs(HM.getConsigs().filter(c => c.id !== id));
-      renderConsigTable();
-      HM.logActivity('Consignação excluída', 'vermelho');
-      toast('Consignação excluída.', 'success');
+    const okBtn = document.getElementById('confirmOkBtn');
+    okBtn.disabled = true;
+    try {
+      if (type === 'vehicle') {
+        await HM.deleteVehicle(id);
+        await renderVehicleTable();
+        await HM.logActivity('Veículo excluído do estoque', 'vermelho');
+        toast('Veículo excluído.', 'success');
+      } else if (type === 'consig') {
+        await HM.deleteConsig(id);
+        await renderConsigTable();
+        await HM.logActivity('Consignação excluída', 'vermelho');
+        toast('Consignação excluída.', 'success');
+      }
+      await renderDashboard();
+      closeConfirm();
+    } catch (err) {
+      console.error('[admin] Falha ao excluir.', err);
+      toast('Não foi possível excluir. Tente novamente.', 'error');
+    } finally {
+      okBtn.disabled = false;
     }
-    renderDashboard();
-    closeConfirm();
   }
 
   /* ── CONFIGURAÇÕES ── */
-  function loadConfigForm() {
-    const cfg = HM.getConfig();
+  async function loadConfigForm() {
+    const cfg = await HM.getConfig();
     document.getElementById('cfg-name').value = cfg.name;
     document.getElementById('cfg-address').value = cfg.address;
     document.getElementById('cfg-wpp').value = cfg.wpp;
@@ -488,7 +532,7 @@
     document.getElementById('cfg-floatwpp').checked = !!cfg.floatwpp;
     document.getElementById('cfg-nophoto').checked = !!cfg.nophoto;
   }
-  document.getElementById('saveConfigBtn').addEventListener('click', () => {
+  document.getElementById('saveConfigBtn').addEventListener('click', async () => {
     const cfg = {
       name: document.getElementById('cfg-name').value.trim(),
       address: document.getElementById('cfg-address').value.trim(),
@@ -502,12 +546,17 @@
       floatwpp: document.getElementById('cfg-floatwpp').checked,
       nophoto: document.getElementById('cfg-nophoto').checked,
     };
-    HM.saveConfig(cfg);
-    HM.logActivity('Configurações salvas', 'azul');
-    toast('Configurações salvas com sucesso! Recarregue o site público para ver as mudanças.', 'success');
+    try {
+      await HM.saveConfig(cfg);
+      await HM.logActivity('Configurações salvas', 'azul');
+      toast('Configurações salvas com sucesso! Recarregue o site público para ver as mudanças.', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao salvar configurações.', err);
+      toast('Não foi possível salvar as configurações.', 'error');
+    }
   });
 
-  document.getElementById('changePassBtn').addEventListener('click', () => {
+  document.getElementById('changePassBtn').addEventListener('click', async () => {
     const p1 = document.getElementById('cfg-pass').value;
     const p2 = document.getElementById('cfg-pass2').value;
     const errEl = document.getElementById('passError');
@@ -515,17 +564,22 @@
     if (p1 !== p2) { errEl.textContent = 'As senhas não coincidem.'; return; }
     if (p1.length < 6) { errEl.textContent = 'Senha muito curta (mín. 6 caracteres).'; return; }
     errEl.textContent = '';
-    HM.setPass(p1);
-    document.getElementById('cfg-pass').value = '';
-    document.getElementById('cfg-pass2').value = '';
-    toast('Senha alterada com sucesso!', 'success');
+    try {
+      await HM.changePassword(p1);
+      document.getElementById('cfg-pass').value = '';
+      document.getElementById('cfg-pass2').value = '';
+      toast('Senha alterada com sucesso!', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao trocar senha.', err);
+      errEl.textContent = 'Não foi possível alterar a senha. Tente novamente.';
+    }
   });
 
   /* ── FORMATAÇÃO DE PREÇO (aplica em qualquer campo de preço do painel) ── */
   ['vPrice', 'cValue'].forEach(id => {
     document.getElementById(id).addEventListener('input', function () {
-      let v = this.value.replace(/[^\d]/g, '');
-      this.value = v ? 'R$ ' + Number(v).toLocaleString('pt-BR') : '';
+      const v = this.value.replace(/[^\d]/g, '');
+      this.value = v ? HM.formatPrice(Number(v)) : '';
     });
   });
 
