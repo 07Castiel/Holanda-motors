@@ -3,23 +3,27 @@
  * -----------------------------------------------------------
  * Fonte única de verdade para o site público (index.html) e o painel do
  * gestor (admin.html). Os dois arquivos só acessam dados através do objeto
- * global HM — nenhum dos dois fala com o Supabase diretamente. Isso é o que
- * mantém os dois sincronizados e é o único lugar que precisaria mudar caso
- * o backend mude novamente no futuro.
+ * global HM — nenhum dos dois fala com o Supabase diretamente.
  *
- * Toda a persistência é feita no Supabase (Postgres + Auth + Storage) —
- * não há mais nenhum dado de aplicação salvo no localStorage. Toda função
- * que acessa o banco é assíncrona (retorna Promise); quem chama precisa
- * usar `await`.
+ * Toda a persistência é feita no Supabase (Postgres + Auth + Storage). Toda
+ * função que acessa o banco é assíncrona (retorna Promise).
  *
- * Requer que supabase-client.js tenha sido carregado antes deste arquivo
- * (ele expõe a constante `supabaseClient`).
+ * Toda ação de escrita é registrada em "logs_acoes" (auditoria) através de
+ * logAction() — é daí que vêm tanto o feed "Atividade recente" do dashboard
+ * quanto o histórico por veículo e a tela de Logs. Não existe mais uma
+ * rotina de log separada por tela: centralizar aqui evita esquecer de
+ * registrar uma ação nova em algum lugar do painel.
+ *
+ * Requer que supabase-client.js tenha sido carregado antes deste arquivo.
  */
 
 const HM = (function () {
   'use strict';
 
   const FOTOS_BUCKET = 'veiculos-fotos';
+
+  /** Erro específico de conflito de concorrência (alguém mais alterou o registro primeiro). */
+  class ConcurrencyError extends Error {}
 
   /** Formata um número em Real (ex: 119900 → "R$ 119.900"). */
   function formatPrice(n) {
@@ -42,14 +46,39 @@ const HM = (function () {
     return `https://wa.me/${wppNumber}?text=${encodeURIComponent(message)}`;
   }
 
+  /**
+   * Redimensiona (máx. 1600px no lado maior) e recomprime uma imagem para
+   * JPEG antes do upload — reduz drasticamente o tamanho de fotos de
+   * celular (que costumam vir com vários MB) e é o que evita o projeto
+   * voltar a esbarrar em limites de armazenamento no futuro.
+   */
+  async function compressImage(file, { maxDimension = 1600, quality = 0.82 } = {}) {
+    try {
+      const bitmap = await createImageBitmap(file);
+      let { width, height } = bitmap;
+      if (width > maxDimension || height > maxDimension) {
+        const scale = maxDimension / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, width, height);
+      bitmap.close?.();
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+      return blob || file;
+    } catch (err) {
+      console.error('[HM] Falha ao comprimir imagem — enviando o arquivo original.', err);
+      return file;
+    }
+  }
+
   // ── Mapeamento linha do banco → formato usado pelas telas ──
-  // Mantém site.js e admin.js praticamente inalterados: eles continuam
-  // recebendo objetos com os mesmos campos de antes (make, model, tipo,
-  // price já formatado, img como URL etc.), só que agora vindos do Supabase.
 
   function mapVehicleRow(row) {
-    const fotos = row.midias_veiculo || [];
-    const foto = fotos.find(f => f.principal) || fotos[0];
+    const fotos = (row.midias_veiculo || []).slice().sort((a, b) => (b.principal ? 1 : 0) - (a.principal ? 1 : 0));
+    const principal = fotos.find(f => f.principal) || fotos[0];
     return {
       id: row.id,
       tipo: row.categorias ? row.categorias.slug : null,
@@ -61,10 +90,36 @@ const HM = (function () {
       cambio: row.cambio || '',
       combustivel: row.combustivel || '',
       cor: row.cor || '',
+      placa: row.placa || '',
       badge: row.badge,
       ativo: row.ativo,
-      img: foto ? foto.url : '',
+      vendido: !!row.vendido,
+      img: principal ? principal.url : '',
+      imagens: fotos.map(f => ({ id: f.id, url: f.url, principal: f.principal })),
       desc: row.descricao || '',
+      updatedAt: row.updated_at,
+    };
+  }
+
+  function mapVehicleForBackup(row) {
+    const fotos = row.midias_veiculo || [];
+    return {
+      id: row.id,
+      tipo: row.categorias ? row.categorias.slug : null,
+      make: row.marcas ? row.marcas.nome : '',
+      model: row.modelo,
+      year: row.ano,
+      km: row.km,
+      price: formatPrice(row.preco),
+      cambio: row.cambio,
+      combustivel: row.combustivel,
+      cor: row.cor,
+      placa: row.placa,
+      badge: row.badge,
+      ativo: row.ativo,
+      vendido: !!row.vendido,
+      desc: row.descricao,
+      imagens: fotos.map(f => ({ url: f.url, principal: f.principal })),
     };
   }
 
@@ -80,6 +135,7 @@ const HM = (function () {
       status: row.status,
       commission: row.comissao || '',
       notes: row.observacoes || '',
+      updatedAt: row.updated_at,
     };
   }
 
@@ -104,14 +160,56 @@ const HM = (function () {
     return data;
   }
 
+  // ── AUDITORIA (logs_acoes) — usada pelo feed do dashboard, pelo
+  // histórico por veículo e pela tela de Logs. ──
+
+  const ACTION_COLORS = {
+    criar: 'verde', atualizar: 'azul', excluir: 'vermelho',
+    ativar: 'verde', desativar: 'amarelo', vender: 'verde',
+    config: 'azul', senha: 'azul', papel: 'azul', login: 'azul',
+  };
+
+  /** Registra uma ação na trilha de auditoria. Nunca lança erro para não interromper a operação principal. */
+  async function logAction(acao, entidade, entidadeId, detalhes) {
+    try {
+      const { data: { user } } = await supabaseClient.auth.getUser();
+      if (!user) return;
+      const { error } = await supabaseClient.from('logs_acoes').insert({
+        usuario_id: user.id,
+        usuario_email: user.email,
+        acao, entidade, entidade_id: entidadeId || null,
+        detalhes: detalhes || null,
+      });
+      if (error) console.error('[HM] Falha ao registrar log de auditoria.', error);
+    } catch (err) {
+      console.error('[HM] Falha ao registrar log de auditoria.', err);
+    }
+  }
+
+  async function getLogs({ page = 0, pageSize = 20, entidade, entidadeId } = {}) {
+    let query = supabaseClient.from('logs_acoes').select('*', { count: 'exact' }).order('created_at', { ascending: false });
+    if (entidade) query = query.eq('entidade', entidade);
+    if (entidadeId) query = query.eq('entidade_id', entidadeId);
+    const from = page * pageSize;
+    const { data, error, count } = await query.range(from, from + pageSize - 1);
+    if (error) throw error;
+    return { rows: data, total: count || 0, page, pageSize };
+  }
+
+  /** Feed "Atividade recente" do dashboard — derivado dos logs de auditoria, não é mais uma tabela própria. */
+  async function getActivity(limit = 8) {
+    const { rows } = await getLogs({ page: 0, pageSize: limit });
+    return rows.map(l => ({
+      msg: `${l.usuario_email ? l.usuario_email.split('@')[0] : 'Alguém'} ${(l.detalhes && l.detalhes.resumo) || l.acao}`,
+      color: ACTION_COLORS[l.acao] || 'azul',
+      time: new Date(l.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+    }));
+  }
+
   // ── VEÍCULOS ──
 
-  async function getVehicles() {
-    const data = unwrap(await supabaseClient
-      .from('veiculos')
-      .select('*, marcas(nome), categorias(slug), midias_veiculo(url, principal)')
-      .order('created_at', { ascending: false }));
-    return data.map(mapVehicleRow);
+  async function getCategorias() {
+    return unwrap(await supabaseClient.from('categorias').select('id, slug, nome').order('nome'));
   }
 
   async function getCategoriaId(slug) {
@@ -119,14 +217,20 @@ const HM = (function () {
     return data.id;
   }
 
-  /** Busca a marca pelo nome (sem diferenciar maiúsculas/minúsculas) ou cria uma nova. */
+  /** Busca a marca pelo nome (sem diferenciar maiúsculas/minúsculas) ou cria uma nova, tolerando corrida entre dois admins criando a mesma marca ao mesmo tempo. */
   async function ensureMarca(nome) {
     const nomeTrim = String(nome || '').trim();
     if (!nomeTrim) throw new Error('Marca é obrigatória.');
     const existente = unwrap(await supabaseClient.from('marcas').select('id').ilike('nome', nomeTrim).maybeSingle());
     if (existente) return existente.id;
-    const criada = unwrap(await supabaseClient.from('marcas').insert({ nome: nomeTrim }).select('id').single());
-    return criada.id;
+    const { data, error } = await supabaseClient.from('marcas').insert({ nome: nomeTrim }).select('id').single();
+    if (!error) return data.id;
+    if (error.code === '23505') {
+      // outro admin criou a mesma marca entre a leitura e a escrita acima
+      const retry = unwrap(await supabaseClient.from('marcas').select('id').ilike('nome', nomeTrim).maybeSingle());
+      if (retry) return retry.id;
+    }
+    throw error;
   }
 
   /** Só um veículo pode ser "destaque" por vez — desmarca os demais. */
@@ -136,40 +240,57 @@ const HM = (function () {
     unwrap(await query);
   }
 
-  function dataUrlToBlob(dataUrl) {
-    const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(dataUrl);
-    if (!match) throw new Error('Formato de imagem inválido.');
-    const mime = match[1];
-    const bytes = atob(match[2]);
-    const buffer = new Uint8Array(bytes.length);
-    for (let i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
-    return { blob: new Blob([buffer], { type: mime }), ext: mime.split('/')[1].replace('jpeg', 'jpg') };
-  }
-
-  async function uploadVehicleImage(vehicleId, dataUrl) {
-    const { blob, ext } = dataUrlToBlob(dataUrl);
-    const path = `${vehicleId}/${Date.now()}.${ext}`;
-    unwrap(await supabaseClient.storage.from(FOTOS_BUCKET).upload(path, blob, { contentType: blob.type, upsert: true }));
+  async function uploadVehicleImage(fileOrBlob, vehicleId) {
+    const ext = (fileOrBlob.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+    const path = `${vehicleId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    unwrap(await supabaseClient.storage.from(FOTOS_BUCKET).upload(path, fileOrBlob, { contentType: fileOrBlob.type }));
     const { data } = supabaseClient.storage.from(FOTOS_BUCKET).getPublicUrl(path);
     return { path, url: data.publicUrl };
   }
 
-  /** Remove a(s) foto(s) atual(is) do veículo (arquivo + registro) e grava a nova, se houver. */
-  async function replaceVehiclePhoto(vehicleId, img) {
-    const antigas = unwrap(await supabaseClient.from('midias_veiculo').select('id, storage_path').eq('veiculo_id', vehicleId));
-    const paths = antigas.filter(m => m.storage_path).map(m => m.storage_path);
-    if (paths.length) unwrap(await supabaseClient.storage.from(FOTOS_BUCKET).remove(paths));
-    if (antigas.length) unwrap(await supabaseClient.from('midias_veiculo').delete().eq('veiculo_id', vehicleId));
+  /**
+   * Sincroniza a galeria de fotos de um veículo com o estado final desejado.
+   * `images`: [{ id?: uuid (foto já existente a manter), file?: Blob (foto nova
+   * a enviar), url?: string (URL já existente ou colada), principal: boolean }]
+   *
+   * Ordem importante (achado na auditoria): as fotos novas são enviadas ANTES
+   * de remover as antigas — se o upload falhar no meio do caminho, o veículo
+   * não fica sem nenhuma foto por causa disso.
+   */
+  async function saveVehicleImages(vehicleId, images) {
+    const existentes = unwrap(await supabaseClient.from('midias_veiculo').select('id, storage_path').eq('veiculo_id', vehicleId));
+    const mantidosIds = new Set(images.filter(i => i.id).map(i => i.id));
+    const removidos = existentes.filter(e => !mantidosIds.has(e.id));
 
-    if (!img) return;
-    let storagePath = null;
-    let url = img;
-    if (img.startsWith('data:')) {
-      const uploaded = await uploadVehicleImage(vehicleId, img);
-      storagePath = uploaded.path;
-      url = uploaded.url;
+    const novos = images.filter(i => !i.id);
+    await Promise.all(novos.map(async img => {
+      let storagePath = null;
+      let url = img.url;
+      if (img.file) {
+        const uploaded = await uploadVehicleImage(img.file, vehicleId);
+        storagePath = uploaded.path;
+        url = uploaded.url;
+      }
+      const inserida = unwrap(await supabaseClient.from('midias_veiculo').insert({ veiculo_id: vehicleId, storage_path: storagePath, url, principal: false }).select('id').single());
+      img.id = inserida.id;
+    }));
+
+    if (removidos.length) {
+      const paths = removidos.filter(r => r.storage_path).map(r => r.storage_path);
+      if (paths.length) unwrap(await supabaseClient.storage.from(FOTOS_BUCKET).remove(paths));
+      unwrap(await supabaseClient.from('midias_veiculo').delete().in('id', removidos.map(r => r.id)));
     }
-    unwrap(await supabaseClient.from('midias_veiculo').insert({ veiculo_id: vehicleId, storage_path: storagePath, url, principal: true }));
+
+    // Garante exatamente uma foto "principal" (a marcada pela UI, ou a primeira
+    // que sobrar) — sempre zera tudo antes de marcar uma, nunca há duas
+    // marcadas ao mesmo tempo (respeita a constraint única do banco).
+    if (images.length) {
+      const principalEscolhida = images.find(i => i.principal) || images[0];
+      unwrap(await supabaseClient.from('midias_veiculo').update({ principal: false }).eq('veiculo_id', vehicleId));
+      if (principalEscolhida.id) {
+        unwrap(await supabaseClient.from('midias_veiculo').update({ principal: true }).eq('id', principalEscolhida.id));
+      }
+    }
   }
 
   function vehiclePayload(input, categoriaId, marcaId) {
@@ -183,29 +304,101 @@ const HM = (function () {
       cambio: input.cambio,
       combustivel: input.combustivel,
       cor: input.cor,
+      placa: input.placa || null,
       badge: input.badge,
       ativo: !!input.ativo,
+      vendido: !!input.vendido,
       descricao: input.desc,
       updated_at: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Lista paginada de veículos, com busca instantânea (marca, modelo ou
+   * placa) e filtros por tipo/badge resolvidos no servidor — assim o
+   * desempenho não degrada conforme o estoque cresce, já que só a página
+   * atual (e não o catálogo inteiro) trafega a cada consulta.
+   */
+  async function getVehicles({ page = 0, pageSize = 20, search = '', tipo = '', badge = '' } = {}) {
+    let query = supabaseClient
+      .from('veiculos')
+      .select('*, marcas(nome), categorias(slug), midias_veiculo(id, url, principal)', { count: 'exact' })
+      .order('created_at', { ascending: false });
+
+    if (tipo) query = query.eq('categoria_id', await getCategoriaId(tipo));
+    if (badge) query = query.eq('badge', badge);
+
+    // Remove vírgulas/parênteses: têm significado estrutural no filtro
+    // ".or()" do PostgREST e quebrariam a sintaxe se viessem do texto digitado.
+    const termo = search.trim().replace(/[,()]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (termo) {
+      const marcasAchadas = unwrap(await supabaseClient.from('marcas').select('id').ilike('nome', `%${termo}%`));
+      const partes = [`modelo.ilike.%${termo}%`, `placa.ilike.%${termo}%`, `cor.ilike.%${termo}%`];
+      if (marcasAchadas.length) partes.push(`marca_id.in.(${marcasAchadas.map(m => m.id).join(',')})`);
+      query = query.or(partes.join(','));
+    }
+
+    const from = page * pageSize;
+    const { data, error, count } = await query.range(from, from + pageSize - 1);
+    if (error) throw error;
+    return { rows: data.map(mapVehicleRow), total: count || 0, page, pageSize };
+  }
+
+  /** Um único veículo em destaque para o hero do site (ou o mais recente, se nenhum estiver marcado) — evita baixar o catálogo inteiro só para montar o hero. */
+  async function getFeaturedVehicle() {
+    const select = '*, marcas(nome), categorias(slug), midias_veiculo(id, url, principal)';
+    const destaque = unwrap(await supabaseClient.from('veiculos').select(select).eq('ativo', true).eq('vendido', false).eq('badge', 'destaque').limit(1).maybeSingle());
+    if (destaque) return mapVehicleRow(destaque);
+    const recente = unwrap(await supabaseClient.from('veiculos').select(select).eq('ativo', true).eq('vendido', false).order('created_at', { ascending: false }).limit(1).maybeSingle());
+    return recente ? mapVehicleRow(recente) : null;
+  }
+
+  /** Contagens para os cards do dashboard — usa `count: 'exact', head: true` (só o número, sem baixar as linhas). */
+  async function getVehicleStats() {
+    const categorias = await getCategorias();
+    const carroId = (categorias.find(c => c.slug === 'carro') || {}).id;
+    const motoId = (categorias.find(c => c.slug === 'moto') || {}).id;
+    const contar = async (builder) => {
+      const { count, error } = await builder;
+      if (error) throw error;
+      return count || 0;
+    };
+    const base = () => supabaseClient.from('veiculos').select('id', { count: 'exact', head: true });
+    const [total, ativos, carros, motos, consignados, destaque, vendidos] = await Promise.all([
+      contar(base()),
+      contar(base().eq('ativo', true)),
+      carroId ? contar(base().eq('categoria_id', carroId)) : 0,
+      motoId ? contar(base().eq('categoria_id', motoId)) : 0,
+      contar(base().eq('badge', 'consignado')),
+      contar(base().eq('badge', 'destaque')),
+      contar(base().eq('vendido', true)),
+    ]);
+    return { total, ativos, carros, motos, consignados, destaque, vendidos };
   }
 
   async function createVehicle(input) {
     const [categoriaId, marcaId] = await Promise.all([getCategoriaId(input.tipo), ensureMarca(input.make)]);
     if (input.badge === 'destaque') await clearDestaque(null);
     const created = unwrap(await supabaseClient.from('veiculos').insert(vehiclePayload(input, categoriaId, marcaId)).select('id').single());
-    await replaceVehiclePhoto(created.id, input.img);
+    if (input.images) await saveVehicleImages(created.id, input.images);
+    await logAction('criar', 'veiculo', created.id, { resumo: `cadastrou ${input.make} ${input.model}` });
     return created.id;
   }
 
   async function updateVehicle(id, input) {
     const [categoriaId, marcaId] = await Promise.all([getCategoriaId(input.tipo), ensureMarca(input.make)]);
     if (input.badge === 'destaque') await clearDestaque(id);
-    unwrap(await supabaseClient.from('veiculos').update(vehiclePayload(input, categoriaId, marcaId)).eq('id', id));
 
-    const fotoAtual = unwrap(await supabaseClient.from('midias_veiculo').select('url').eq('veiculo_id', id).eq('principal', true).maybeSingle());
-    const urlAtual = fotoAtual ? fotoAtual.url : '';
-    if (urlAtual !== (input.img || '')) await replaceVehiclePhoto(id, input.img);
+    let query = supabaseClient.from('veiculos').update(vehiclePayload(input, categoriaId, marcaId)).eq('id', id);
+    if (input.expectedUpdatedAt) query = query.eq('updated_at', input.expectedUpdatedAt);
+    const { data, error } = await query.select('id');
+    if (error) throw error;
+    if (input.expectedUpdatedAt && (!data || !data.length)) {
+      throw new ConcurrencyError('Este veículo foi alterado por outra pessoa enquanto você editava. Recarregue a lista e tente novamente.');
+    }
+
+    if (input.images) await saveVehicleImages(id, input.images);
+    await logAction('atualizar', 'veiculo', id, { resumo: `atualizou ${input.make} ${input.model}` });
   }
 
   async function deleteVehicle(id) {
@@ -213,17 +406,45 @@ const HM = (function () {
     const paths = fotos.filter(f => f.storage_path).map(f => f.storage_path);
     if (paths.length) unwrap(await supabaseClient.storage.from(FOTOS_BUCKET).remove(paths));
     unwrap(await supabaseClient.from('veiculos').delete().eq('id', id));
+    await logAction('excluir', 'veiculo', id, { resumo: 'excluiu um veículo do estoque' });
   }
 
-  async function toggleVehicleAtivo(id, ativo) {
-    unwrap(await supabaseClient.from('veiculos').update({ ativo, updated_at: new Date().toISOString() }).eq('id', id));
+  /** Alterna visibilidade de forma atômica no banco (RPC) — evita o "toggle" perder uma mudança feita por outra pessoa entre a leitura e a escrita. */
+  async function toggleVehicleAtivo(id) {
+    const { data, error } = await supabaseClient.rpc('toggle_veiculo_ativo', { p_id: id });
+    if (error) throw error;
+    await logAction(data ? 'ativar' : 'desativar', 'veiculo', id, { resumo: `${data ? 'exibiu' : 'ocultou'} um veículo no site` });
+    return data;
+  }
+
+  /** Marca/desmarca um veículo como vendido — ao marcar como vendido, também some do site (ativo = false). */
+  async function setVehicleVendido(id, vendido, label) {
+    const payload = { vendido, updated_at: new Date().toISOString() };
+    if (vendido) payload.ativo = false;
+    unwrap(await supabaseClient.from('veiculos').update(payload).eq('id', id));
+    await logAction(vendido ? 'vender' : 'atualizar', 'veiculo', id, {
+      resumo: vendido ? `marcou ${label || 'um veículo'} como vendido` : `reverteu ${label || 'um veículo'} para disponível`,
+    });
   }
 
   // ── CONSIGNAÇÕES ──
 
-  async function getConsigs() {
-    const data = unwrap(await supabaseClient.from('consignacoes').select('*').order('created_at', { ascending: false }));
-    return data.map(mapConsigRow);
+  async function getConsigs({ page = 0, pageSize = 20 } = {}) {
+    const from = page * pageSize;
+    const { data, error, count } = await supabaseClient
+      .from('consignacoes').select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    return { rows: data.map(mapConsigRow), total: count || 0, page, pageSize };
+  }
+
+  async function getConsigStats() {
+    const base = () => supabaseClient.from('consignacoes').select('id', { count: 'exact', head: true });
+    const [{ count: total, error: e1 }, { count: ativas, error: e2 }] = await Promise.all([base(), base().eq('status', 'ativo')]);
+    if (e1) throw e1;
+    if (e2) throw e2;
+    return { total: total || 0, ativas: ativas || 0 };
   }
 
   function consigPayload(input) {
@@ -242,13 +463,24 @@ const HM = (function () {
   }
 
   async function createConsig(input) {
-    unwrap(await supabaseClient.from('consignacoes').insert(consigPayload(input)));
+    const created = unwrap(await supabaseClient.from('consignacoes').insert(consigPayload(input)).select('id').single());
+    await logAction('criar', 'consignacao', created.id, { resumo: `registrou consignação de ${input.owner}` });
   }
+
   async function updateConsig(id, input) {
-    unwrap(await supabaseClient.from('consignacoes').update(consigPayload(input)).eq('id', id));
+    let query = supabaseClient.from('consignacoes').update(consigPayload(input)).eq('id', id);
+    if (input.expectedUpdatedAt) query = query.eq('updated_at', input.expectedUpdatedAt);
+    const { data, error } = await query.select('id');
+    if (error) throw error;
+    if (input.expectedUpdatedAt && (!data || !data.length)) {
+      throw new ConcurrencyError('Esta consignação foi alterada por outra pessoa enquanto você editava. Recarregue a lista e tente novamente.');
+    }
+    await logAction('atualizar', 'consignacao', id, { resumo: `atualizou a consignação de ${input.owner}` });
   }
+
   async function deleteConsig(id) {
     unwrap(await supabaseClient.from('consignacoes').delete().eq('id', id));
+    await logAction('excluir', 'consignacao', id, { resumo: 'excluiu uma consignação' });
   }
 
   // ── CONFIGURAÇÕES DA LOJA ──
@@ -273,24 +505,7 @@ const HM = (function () {
       ocultar_sem_foto: cfg.nophoto,
       updated_at: new Date().toISOString(),
     }).eq('id', 1));
-  }
-
-  // ── ATIVIDADE (dashboard) ──
-
-  async function getActivity() {
-    const data = unwrap(await supabaseClient.from('atividades').select('*').order('created_at', { ascending: false }).limit(20));
-    return data.map(a => ({
-      msg: a.mensagem,
-      color: a.cor,
-      time: new Date(a.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-    }));
-  }
-
-  async function logActivity(msg, color) {
-    unwrap(await supabaseClient.from('atividades').insert({ mensagem: msg, cor: color }));
-    // mantém a tabela enxuta, guardando só as últimas 50 entradas
-    const antigas = unwrap(await supabaseClient.from('atividades').select('id').order('created_at', { ascending: false }).range(50, 999));
-    if (antigas.length) unwrap(await supabaseClient.from('atividades').delete().in('id', antigas.map(a => a.id)));
+    await logAction('config', 'config', null, { resumo: 'atualizou as configurações da loja' });
   }
 
   // ── AUTENTICAÇÃO (Supabase Auth) ──
@@ -298,6 +513,7 @@ const HM = (function () {
   async function login(email, password) {
     const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
     if (error) throw error;
+    await logAction('login', 'sessao', null, { resumo: 'entrou no painel' });
     return data.session;
   }
 
@@ -311,41 +527,236 @@ const HM = (function () {
   }
 
   function onAuthStateChange(callback) {
-    return supabaseClient.auth.onAuthStateChange((_event, session) => callback(session));
+    return supabaseClient.auth.onAuthStateChange((_event, session) => callback(session, _event));
   }
 
   async function changePassword(newPassword) {
     const { error } = await supabaseClient.auth.updateUser({ password: newPassword });
     if (error) throw error;
+    await logAction('senha', 'usuario', null, { resumo: 'alterou a própria senha' });
+  }
+
+  // ── USUÁRIOS E NÍVEIS DE ACESSO ──
+
+  async function getCurrentUserProfile() {
+    const { data: { user } } = await supabaseClient.auth.getUser();
+    if (!user) return null;
+    const perfil = unwrap(await supabaseClient.from('usuarios').select('id, nome, email, role').eq('id', user.id).maybeSingle());
+    return perfil || { id: user.id, nome: user.email, email: user.email, role: 'vendedor' };
+  }
+
+  async function getUsers() {
+    return unwrap(await supabaseClient.from('usuarios').select('id, nome, email, role, created_at').order('created_at', { ascending: true }));
+  }
+
+  async function updateUserRole(userId, role) {
+    unwrap(await supabaseClient.from('usuarios').update({ role }).eq('id', userId));
+    await logAction('papel', 'usuario', userId, { resumo: `alterou o nível de acesso de um usuário para ${role}` });
+  }
+
+  // ── MIGRAÇÃO IDEMPOTENTE A PARTIR DO LOCALSTORAGE (sistema antigo) ──
+  // Usada por migrar-localstorage.html. Cada registro migrado grava seu id
+  // original do localStorage em "legacy_id" (coluna com índice único
+  // parcial no banco) — é isso que torna seguro rodar a migração de novo
+  // (ex: depois de cadastrar mais veículos no site antigo por engano):
+  // quem já foi importado é pulado, nunca duplicado.
+
+  function legacyDataUrlToBlob(dataUrl) {
+    const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(dataUrl);
+    if (!match) return null;
+    const bytes = atob(match[2]);
+    const buffer = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
+    return new Blob([buffer], { type: match[1] });
+  }
+
+  /** Converte o campo único "img" do sistema antigo (Base64 ou URL externa) para o formato de galeria, comprimindo fotos enviadas por upload. */
+  async function legacyImgToImages(img) {
+    if (!img) return [];
+    if (img.startsWith('data:')) {
+      const blob = legacyDataUrlToBlob(img);
+      if (!blob) return [];
+      return [{ id: null, file: await compressImage(blob), url: '', principal: true }];
+    }
+    return [{ id: null, file: null, url: img, principal: true }];
+  }
+
+  /**
+   * Importa um veículo do formato antigo (chave "hm_vehicles" do
+   * localStorage). Resolve/cria marca e categoria, envia a foto ao
+   * Storage se for Base64, e é seguro chamar de novo com o mesmo `legacy`
+   * — a segunda chamada é pulada (`skipped: true`) em vez de duplicar.
+   */
+  async function importLegacyVehicle(legacy) {
+    if (legacy.id == null) throw new Error('Veículo sem id no localStorage — não é possível migrar com segurança.');
+    const legacyId = String(legacy.id);
+
+    const existente = unwrap(await supabaseClient.from('veiculos').select('id').eq('legacy_id', legacyId).maybeSingle());
+    if (existente) return { skipped: true, id: existente.id };
+
+    const [categoriaId, marcaId] = await Promise.all([getCategoriaId(legacy.tipo), ensureMarca(legacy.make)]);
+    if (legacy.badge === 'destaque') await clearDestaque(null);
+
+    const payload = vehiclePayload(legacy, categoriaId, marcaId);
+    payload.legacy_id = legacyId;
+    const created = unwrap(await supabaseClient.from('veiculos').insert(payload).select('id').single());
+
+    const images = await legacyImgToImages(legacy.img);
+    if (images.length) await saveVehicleImages(created.id, images);
+
+    await logAction('criar', 'veiculo', created.id, { resumo: `migrou ${legacy.make} ${legacy.model} do localStorage` });
+    return { created: true, id: created.id };
+  }
+
+  /** Mesma lógica de importLegacyVehicle, para consignações (chave "hm_consig"). */
+  async function importLegacyConsig(legacy) {
+    if (legacy.id == null) throw new Error('Consignação sem id no localStorage — não é possível migrar com segurança.');
+    const legacyId = String(legacy.id);
+
+    const existente = unwrap(await supabaseClient.from('consignacoes').select('id').eq('legacy_id', legacyId).maybeSingle());
+    if (existente) return { skipped: true, id: existente.id };
+
+    const payload = consigPayload(legacy);
+    payload.legacy_id = legacyId;
+    const created = unwrap(await supabaseClient.from('consignacoes').insert(payload).select('id').single());
+
+    await logAction('criar', 'consignacao', created.id, { resumo: `migrou consignação de ${legacy.owner} do localStorage` });
+    return { created: true, id: created.id };
+  }
+
+  // ── BACKUP E RESTAURAÇÃO ──
+  // Exporta/restaura os dados de aplicação (veículos, fotos referenciadas
+  // por URL, consignações, marcas e configurações) como um JSON portável,
+  // usando as mesmas operações autenticadas do resto do painel (não requer
+  // e nunca usa a chave service_role). Isso complementa — não substitui —
+  // os backups automáticos do próprio Supabase (ver README).
+
+  async function exportBackup() {
+    // Categorias não entram no backup: são um catálogo fixo (carro/moto)
+    // já recriado pelo seed do schema.sql, não um dado editável do usuário.
+    const [marcasRes, veiculosRes, consigRes, configRes] = await Promise.all([
+      supabaseClient.from('marcas').select('nome'),
+      supabaseClient.from('veiculos').select('*, marcas(nome), categorias(slug), midias_veiculo(url, principal)').order('created_at'),
+      supabaseClient.from('consignacoes').select('*').order('created_at'),
+      supabaseClient.from('configuracoes_loja').select('*').eq('id', 1).single(),
+    ]);
+    [marcasRes, veiculosRes, consigRes, configRes].forEach(unwrap);
+
+    return {
+      versao: 1,
+      exportado_em: new Date().toISOString(),
+      marcas: marcasRes.data,
+      veiculos: veiculosRes.data.map(mapVehicleForBackup),
+      consignacoes: consigRes.data.map(mapConsigRow),
+      configuracao: mapConfigRow(configRes.data),
+    };
+  }
+
+  async function createVehicleFromBackup(v) {
+    const [categoriaId, marcaId] = await Promise.all([getCategoriaId(v.tipo), ensureMarca(v.make)]);
+    const payload = {
+      id: v.id,
+      categoria_id: categoriaId,
+      marca_id: marcaId,
+      modelo: v.model,
+      ano: v.year,
+      km: v.km,
+      preco: parsePrice(v.price),
+      cambio: v.cambio,
+      combustivel: v.combustivel,
+      cor: v.cor,
+      placa: v.placa || null,
+      badge: 'seminovo', // ajustado abaixo se necessário — evita violar o índice de "destaque único" durante a restauração
+      ativo: !!v.ativo,
+      vendido: !!v.vendido,
+      descricao: v.desc,
+    };
+    const { data, error } = await supabaseClient.from('veiculos').upsert(payload, { onConflict: 'id' }).select('id').single();
+    if (error) throw error;
+    if (v.badge === 'destaque') {
+      await clearDestaque(data.id);
+      unwrap(await supabaseClient.from('veiculos').update({ badge: 'destaque' }).eq('id', data.id));
+    } else if (v.badge && v.badge !== payload.badge) {
+      unwrap(await supabaseClient.from('veiculos').update({ badge: v.badge }).eq('id', data.id));
+    }
+    const images = (v.imagens || []).map(img => ({ id: null, file: null, url: img.url, principal: img.principal }));
+    if (images.length) await saveVehicleImages(data.id, images);
+  }
+
+  async function createConsigFromBackup(c) {
+    const payload = { id: c.id, ...consigPayload(c) };
+    const { error } = await supabaseClient.from('consignacoes').upsert(payload, { onConflict: 'id' });
+    if (error) throw error;
+  }
+
+  /**
+   * Restaura um backup gerado por exportBackup(). Continua mesmo se um
+   * item específico falhar (ex: marca inválida) — cada falha é reportada
+   * via `onProgress`, e o restante do backup ainda é processado.
+   */
+  async function restoreBackup(backup, onProgress) {
+    const log = (msg) => { if (onProgress) onProgress(msg); };
+    for (const m of backup.marcas || []) {
+      try { await ensureMarca(m.nome); } catch (err) { log(`✗ Marca "${m.nome}": ${err.message}`); }
+    }
+    for (const v of backup.veiculos || []) {
+      try { await createVehicleFromBackup(v); log(`✓ Veículo restaurado: ${v.make} ${v.model}`); }
+      catch (err) { log(`✗ Falha ao restaurar "${v.make} ${v.model}": ${err.message}`); }
+    }
+    for (const c of backup.consignacoes || []) {
+      try { await createConsigFromBackup(c); log(`✓ Consignação restaurada: ${c.owner}`); }
+      catch (err) { log(`✗ Falha ao restaurar consignação de "${c.owner}": ${err.message}`); }
+    }
+    if (backup.configuracao) {
+      try { await saveConfig(backup.configuracao); log('✓ Configurações da loja restauradas.'); }
+      catch (err) { log(`✗ Falha ao restaurar configurações: ${err.message}`); }
+    }
+    await logAction('atualizar', 'backup', null, { resumo: 'restaurou um backup pelo painel' });
   }
 
   return {
+    ConcurrencyError,
     // veículos
     getVehicles,
+    getVehicleStats,
+    getFeaturedVehicle,
+    getCategorias,
     createVehicle,
     updateVehicle,
     deleteVehicle,
     toggleVehicleAtivo,
+    setVehicleVendido,
     // consignações
     getConsigs,
+    getConsigStats,
     createConsig,
     updateConsig,
     deleteConsig,
     // configurações
     getConfig,
     saveConfig,
-    // atividade
+    // auditoria
     getActivity,
-    logActivity,
-    // autenticação
+    getLogs,
+    // autenticação e usuários
     login,
     logout,
     getSession,
     onAuthStateChange,
     changePassword,
+    getCurrentUserProfile,
+    getUsers,
+    updateUserRole,
+    // migração idempotente a partir do localStorage
+    importLegacyVehicle,
+    importLegacyConsig,
+    // backup
+    exportBackup,
+    restoreBackup,
     // utilitários
     wppLink,
     formatKm,
     formatPrice,
+    compressImage,
   };
 })();

@@ -192,6 +192,40 @@ tbody td { padding: 14px 16px; font-size: 13px; vertical-align: middle; }
 .toggle input:checked + .toggle-slider::before { transform: translateX(20px); }
 .toggle input:focus-visible + .toggle-slider { outline: 2px solid var(--red); outline-offset: 2px; }
 
+/* ── ROLE BADGE (topbar) ── */
+.role-badge { font-size: 9px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; padding: 4px 10px; border-radius: 20px; background: rgba(255,255,255,.08); color: var(--gray); }
+.role-badge.administrador { background: rgba(200,16,46,.18); color: var(--red); }
+.role-badge.gerente { background: rgba(59,130,246,.18); color: var(--blue); }
+.role-badge.vendedor { background: rgba(34,197,94,.15); color: var(--green); }
+
+.badge-vendido { background: rgba(255,255,255,.1); color: var(--white); }
+
+.page-hint { font-size: 12px; color: var(--gray); line-height: 1.6; margin-bottom: 16px; max-width: 620px; }
+
+/* ── PAGINAÇÃO / CARREGAMENTO INCREMENTAL ── */
+.list-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+.list-count { font-size: 12px; color: var(--gray); }
+
+/* ── GALERIA DE FOTOS (múltiplas imagens no modal de veículo) ── */
+.img-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin-top: 12px; }
+.img-gallery-item { position: relative; border-radius: 4px; overflow: hidden; background: var(--dark3); aspect-ratio: 4/3; }
+.img-gallery-item img { width: 100%; height: 100%; object-fit: cover; }
+.img-gallery-item .gallery-actions { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: space-between; padding: 5px; background: linear-gradient(180deg, rgba(0,0,0,.5), transparent 40%); opacity: 0; transition: .15s; }
+.img-gallery-item:hover .gallery-actions, .img-gallery-item .gallery-actions:focus-within { opacity: 1; }
+.img-gallery-item .gallery-btn { width: 22px; height: 22px; border-radius: 50%; border: none; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.img-gallery-item .gallery-btn.star.is-principal { background: var(--red); color: #fff; }
+.img-gallery-item .gallery-principal-tag { position: absolute; bottom: 5px; left: 5px; font-size: 8px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; background: var(--red); color: #fff; padding: 2px 6px; border-radius: 10px; }
+.img-gallery-item.uploading { opacity: .5; }
+
+/* ── HISTÓRICO / LOGS ── */
+.history-title { font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--gray); margin: 24px 0 10px; padding-top: 16px; border-top: 1px solid var(--border); }
+.log-list { list-style: none; display: flex; flex-direction: column; gap: 8px; max-height: 220px; overflow-y: auto; font-size: 12px; }
+.log-list li { padding: 8px 10px; border-radius: 4px; background: var(--dark); border: 1px solid var(--border); color: var(--gray); }
+.log-list li strong { color: var(--white); font-weight: 600; }
+.log-list li.log-ok { border-color: rgba(34,197,94,.3); }
+.log-list li.log-err { border-color: rgba(200,16,46,.3); color: #f87171; }
+.log-empty { font-size: 12px; color: var(--gray); padding: 8px 0; }
+
 /* ── RESPONSIVO ── */
 @media (max-width: 900px) {
   .sidebar { transform: translateX(-100%); }

@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Holanda Motors — Migração do localStorage para o Supabase</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0f0f10; color: #eee; max-width: 720px; margin: 0 auto; padding: 32px 20px 80px; line-height: 1.5; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.lead { color: #999; margin-top: 0; }
+  section { background: #1a1a1c; border: 1px solid #2a2a2d; border-radius: 10px; padding: 20px; margin-top: 20px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  button { background: #C8102E; color: #fff; border: none; border-radius: 6px; padding: 10px 18px; font-size: 14px; cursor: pointer; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.secondary { background: #333; }
+  input { width: 100%; box-sizing: border-box; background: #111; border: 1px solid #333; color: #eee; border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; font-size: 14px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  ul.log { list-style: none; margin: 12px 0 0; padding: 0; font-size: 13px; max-height: 320px; overflow-y: auto; }
+  ul.log li { padding: 4px 0; border-bottom: 1px solid #232326; }
+  .ok { color: #4ade80; }
+  .err { color: #f87171; }
+  .warn { color: #facc15; }
+  .muted { color: #888; }
+  code { background: #111; padding: 1px 5px; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid #232326; }
+  progress { width: 100%; height: 10px; accent-color: #C8102E; margin-top: 4px; }
+  .progress-label { font-size: 12px; color: #999; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Migração: localStorage → Supabase</h1>
+<p class="lead">
+  Página temporária de uso único, feita para ser aberta <strong>direto no GitHub Pages</strong> (a mesma origem onde o site antigo salvou os dados) — o navegador só enxerga o <code>localStorage</code> do domínio em que a página está aberta. É seguro rodar mais de uma vez: itens já migrados são detectados e pulados, nunca duplicados. Depois de confirmar que está tudo certo, apague este arquivo do projeto.
+</p>
+
+<section id="loginSection">
+  <h2>1. Entrar como administrador</h2>
+  <p class="muted">A migração grava dados no Supabase, então exige uma sessão autenticada (as mesmas regras de segurança do painel se aplicam aqui).</p>
+  <div id="loginForm">
+    <input type="email" id="mEmail" placeholder="seu@email.com" autocomplete="username">
+    <input type="password" id="mPass" placeholder="Senha" autocomplete="current-password">
+    <button id="mLoginBtn">Entrar</button>
+    <p id="mLoginMsg" class="err"></p>
+  </div>
+  <p id="loggedInMsg" style="display:none" class="ok">✓ Autenticado.</p>
+</section>
+
+<section id="scanSection" style="display:none">
+  <h2>2. Dados encontrados neste navegador</h2>
+  <table id="scanTable"><tbody></tbody></table>
+  <p id="scanEmpty" class="muted" style="display:none">Nenhum dado do sistema antigo foi encontrado neste domínio — não há nada para migrar. Confirme que você abriu esta página no mesmo endereço (GitHub Pages) onde o painel antigo era usado.</p>
+</section>
+
+<section id="migrateSection" style="display:none">
+  <h2>3. Migrar para o Supabase</h2>
+  <div class="row">
+    <button id="migrateBtn">Migrar agora</button>
+  </div>
+  <progress id="migrateProgress" value="0" max="1" hidden></progress>
+  <p class="progress-label" id="migrateProgressLabel"></p>
+  <ul class="log" id="migrateLog"></ul>
+</section>
+
+<section id="reportSection" style="display:none">
+  <h2>4. Relatório da migração</h2>
+  <div id="reportSummary"></div>
+  <div id="reportErrors" style="margin-top:12px"></div>
+</section>
+
+<section id="cleanupSection" style="display:none">
+  <h2>5. Concluir (opcional)</h2>
+  <p class="muted">Como a migração é idempotente, <strong>não é obrigatório</strong> limpar o <code>localStorage</code> — rodar de novo no futuro não duplica nada. Isto também <strong>não apaga nada no Supabase</strong>, só a cópia antiga que ficou neste navegador.</p>
+  <button id="cleanupBtn" class="secondary">Limpar dados antigos do navegador</button>
+  <p id="cleanupMsg" class="ok"></p>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="assets/js/supabase-client.js"></script>
+<script src="assets/js/data.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const LEGACY_KEYS = { vehicles: 'hm_vehicles', consig: 'hm_consig', config: 'hm_config' };
+
+  function readLegacy(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (err) {
+      console.error(`[migrar] Não foi possível ler "${key}".`, err);
+      return null;
+    }
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+  }
+
+  function logLine(ulId, text, cls) {
+    const li = document.createElement('li');
+    li.textContent = text;
+    if (cls) li.className = cls;
+    const ul = document.getElementById(ulId);
+    ul.appendChild(li);
+    ul.scrollTop = ul.scrollHeight;
+  }
+
+  let legacyData = null;
+
+  function scan() {
+    legacyData = {
+      vehicles: readLegacy(LEGACY_KEYS.vehicles) || [],
+      consig: readLegacy(LEGACY_KEYS.consig) || [],
+      config: readLegacy(LEGACY_KEYS.config) || null,
+    };
+    const tbody = document.querySelector('#scanTable tbody');
+    const rows = [
+      ['Veículos', legacyData.vehicles.length],
+      ['Consignações', legacyData.consig.length],
+      ['Configurações da loja', legacyData.config ? '1 registro encontrado' : 'não encontrado (será mantido o padrão)'],
+      ['Origem (domínio atual)', location.origin],
+    ];
+    tbody.innerHTML = rows.map(([label, val]) => `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(String(val))}</td></tr>`).join('');
+    const nadaEncontrado = !legacyData.vehicles.length && !legacyData.consig.length && !legacyData.config;
+    document.getElementById('scanEmpty').style.display = nadaEncontrado ? 'block' : 'none';
+    document.getElementById('scanSection').style.display = 'block';
+    document.getElementById('migrateSection').style.display = nadaEncontrado ? 'none' : 'block';
+  }
+
+  async function migrate() {
+    const btn = document.getElementById('migrateBtn');
+    btn.disabled = true;
+    const logId = 'migrateLog';
+    document.getElementById(logId).innerHTML = '';
+    document.getElementById('reportSection').style.display = 'none';
+
+    const report = {
+      vehicles: { created: 0, skipped: 0, failed: 0 },
+      consig: { created: 0, skipped: 0, failed: 0 },
+      config: null,
+      errors: [],
+    };
+
+    const total = legacyData.vehicles.length + legacyData.consig.length + (legacyData.config ? 1 : 0);
+    const progressBar = document.getElementById('migrateProgress');
+    const progressLabel = document.getElementById('migrateProgressLabel');
+    progressBar.hidden = false;
+    progressBar.max = total || 1;
+    progressBar.value = 0;
+    let done = 0;
+    function tick() {
+      done++;
+      progressBar.value = done;
+      progressLabel.textContent = `${done} de ${total} processados`;
+    }
+
+    // Configurações da loja (não versionadas por legacy_id — é uma linha
+    // única, então salvar de novo apenas reaplica os mesmos valores).
+    if (legacyData.config) {
+      try {
+        await HM.saveConfig(legacyData.config);
+        report.config = 'ok';
+        logLine(logId, '✓ Configurações da loja migradas.', 'ok');
+      } catch (err) {
+        report.config = 'erro';
+        report.errors.push(`Configurações da loja: ${err.message}`);
+        logLine(logId, `✗ Falha ao migrar configurações: ${err.message}`, 'err');
+      }
+      tick();
+    }
+
+    // Veículos — HM.importLegacyVehicle() é idempotente: se este veículo já
+    // foi migrado antes (mesmo legacy_id), é pulado em vez de duplicado.
+    for (const v of legacyData.vehicles) {
+      try {
+        const resultado = await HM.importLegacyVehicle(v);
+        if (resultado.skipped) {
+          report.vehicles.skipped++;
+          logLine(logId, `↷ Já migrado antes: ${v.make} ${v.model}`, 'muted');
+        } else {
+          report.vehicles.created++;
+          logLine(logId, `✓ Veículo migrado: ${v.make} ${v.model}`, 'ok');
+        }
+      } catch (err) {
+        report.vehicles.failed++;
+        report.errors.push(`Veículo "${v.make} ${v.model}": ${err.message}`);
+        logLine(logId, `✗ Falha ao migrar veículo "${v.make} ${v.model}": ${err.message}`, 'err');
+      }
+      tick();
+    }
+
+    // Consignações — mesma lógica idempotente.
+    for (const c of legacyData.consig) {
+      try {
+        const resultado = await HM.importLegacyConsig(c);
+        if (resultado.skipped) {
+          report.consig.skipped++;
+          logLine(logId, `↷ Já migrada antes: consignação de ${c.owner}`, 'muted');
+        } else {
+          report.consig.created++;
+          logLine(logId, `✓ Consignação migrada: ${c.owner} — ${c.vehicle}`, 'ok');
+        }
+      } catch (err) {
+        report.consig.failed++;
+        report.errors.push(`Consignação de "${c.owner}": ${err.message}`);
+        logLine(logId, `✗ Falha ao migrar consignação de "${c.owner}": ${err.message}`, 'err');
+      }
+      tick();
+    }
+
+    renderReport(report);
+    btn.disabled = false;
+  }
+
+  function renderReport(report) {
+    const totalFalhas = report.vehicles.failed + report.consig.failed + (report.config === 'erro' ? 1 : 0);
+    document.getElementById('reportSection').style.display = 'block';
+    document.getElementById('reportSummary').innerHTML = `
+      <table>
+        <tbody>
+          <tr><td>Veículos criados agora</td><td>${report.vehicles.created}</td></tr>
+          <tr><td>Veículos já migrados antes (pulados)</td><td>${report.vehicles.skipped}</td></tr>
+          <tr><td>Veículos com falha</td><td>${report.vehicles.failed}</td></tr>
+          <tr><td>Consignações criadas agora</td><td>${report.consig.created}</td></tr>
+          <tr><td>Consignações já migradas antes (puladas)</td><td>${report.consig.skipped}</td></tr>
+          <tr><td>Consignações com falha</td><td>${report.consig.failed}</td></tr>
+          <tr><td>Configurações da loja</td><td>${report.config === 'ok' ? 'Migradas' : report.config === 'erro' ? 'Falhou' : '—'}</td></tr>
+        </tbody>
+      </table>`;
+    document.getElementById('reportErrors').innerHTML = report.errors.length
+      ? `<p class="warn">${totalFalhas} item(ns) com falha — rodar "Migrar agora" de novo é seguro, só tenta de novo o que falhou:</p><ul>${report.errors.map(e => `<li class="err">${escapeHtml(e)}</li>`).join('')}</ul>`
+      : '<p class="ok">Nenhuma falha — tudo migrado com sucesso (ou já estava migrado antes).</p>';
+    document.getElementById('cleanupSection').style.display = 'block';
+  }
+
+  document.getElementById('cleanupBtn').addEventListener('click', () => {
+    Object.values(LEGACY_KEYS).forEach(k => localStorage.removeItem(k));
+    document.getElementById('cleanupMsg').textContent = '✓ Dados antigos removidos deste navegador. O site e o painel agora usam exclusivamente o Supabase. Você já pode apagar migrar-localstorage.html do projeto.';
+  });
+
+  document.getElementById('migrateBtn').addEventListener('click', migrate);
+
+  async function afterLogin() {
+    document.getElementById('loginForm').style.display = 'none';
+    document.getElementById('loggedInMsg').style.display = 'block';
+    scan();
+  }
+
+  document.getElementById('mLoginBtn').addEventListener('click', async () => {
+    const email = document.getElementById('mEmail').value.trim();
+    const pass = document.getElementById('mPass').value;
+    const msgEl = document.getElementById('mLoginMsg');
+    msgEl.textContent = '';
+    try {
+      await HM.login(email, pass);
+      await afterLogin();
+    } catch (err) {
+      msgEl.textContent = 'E-mail ou senha incorretos.';
+    }
+  });
+
+  (async function init() {
+    try {
+      const session = await HM.getSession();
+      if (session) await afterLogin();
+    } catch (err) {
+      console.error('[migrar] Falha ao verificar sessão.', err);
+      document.getElementById('mLoginMsg').textContent = 'Não foi possível conectar ao Supabase. Verifique a configuração em supabase-client.js.';
+    }
+  })();
+})();
+</script>
+</body>
+</html>

@@ -4,9 +4,9 @@
  * Qualquer alteração salva pelo painel do gestor (admin.html) aparece
  * aqui na próxima vez que a página for carregada.
  *
- * Config e veículos são buscados uma vez no carregamento da página e
- * mantidos em cache local (cfg / vehiclesCache) — os filtros e o modal
- * de detalhes trabalham em cima desse cache, sem refazer requisições.
+ * O catálogo é paginado (carregamento incremental) em vez de baixar o
+ * estoque inteiro de uma vez — importante conforme o número de veículos
+ * cresce. Trocar de filtro refaz a consulta no servidor.
  */
 (function () {
   'use strict';
@@ -15,8 +15,7 @@
   const badgeLabel = { destaque: 'Destaque', seminovo: 'Seminovo', consignado: 'Consignado' };
 
   let cfg = null;
-  let vehiclesCache = [];
-  let currentFilter = 'todos';
+  let catalogState = { page: 0, pageSize: 9, filter: 'todos', rows: [], total: 0 };
   let lastFocusedEl = null;
 
   /* ── Aplica as configurações da loja em todos os pontos do site ── */
@@ -39,10 +38,8 @@
     document.getElementById('instaLink').href = 'https://instagram.com/' + cfg.insta.replace('@', '');
     document.getElementById('instaHandle').textContent = cfg.insta;
 
-    // Botão flutuante de WhatsApp é opcional (configurável no painel)
     document.getElementById('floatWppBtn').style.display = cfg.floatwpp ? 'flex' : 'none';
 
-    // Seção de consignação é opcional — some do menu também, não só da página
     if (!cfg.consig) {
       document.getElementById('consignacao').style.display = 'none';
       ['navConsig', 'navConsigMobile', 'navConsigFooter', 'heroConsigBtn'].forEach(id => {
@@ -53,20 +50,25 @@
   }
 
   function formatPhoneDisplay(digits) {
-    // "5585997576262" → "(85) 99757-6262"
     const clean = String(digits).replace(/\D/g, '');
     const local = clean.startsWith('55') ? clean.slice(2) : clean;
     const match = local.match(/^(\d{2})(\d{5})(\d{4})$/);
     return match ? `(${match[1]}) ${match[2]}-${match[3]}` : digits;
   }
 
-  /* ── HERO dinâmico: mostra o veículo em destaque (ou o primeiro disponível) ── */
-  function renderHero() {
+  /* ── HERO dinâmico: mostra o veículo em destaque (ou o mais recente) — busca só um registro, não o catálogo inteiro ── */
+  async function renderHero() {
     const wrap = document.getElementById('heroVisual');
     if (!cfg.hero) { wrap.style.display = 'none'; return; }
-    const vehicles = vehiclesCache.filter(v => v.ativo);
-    if (!vehicles.length) { wrap.style.display = 'none'; return; }
-    const featured = vehicles.find(v => v.badge === 'destaque') || vehicles[0];
+    let featured;
+    try {
+      featured = await HM.getFeaturedVehicle();
+    } catch (err) {
+      console.error('[site] Falha ao carregar veículo em destaque.', err);
+      wrap.style.display = 'none';
+      return;
+    }
+    if (!featured) { wrap.style.display = 'none'; return; }
     wrap.innerHTML = `
       <div class="hero-car-card">
         <div class="hero-car-img">
@@ -91,11 +93,38 @@
     return div.innerHTML;
   }
 
-  /* ── CATÁLOGO ── */
-  function getVisibleVehicles() {
-    let list = vehiclesCache.filter(v => v.ativo);
-    if (cfg.nophoto) list = list.filter(v => v.img);
-    return list;
+  /* ── CATÁLOGO (paginado) ── */
+  async function loadCatalogPage(reset) {
+    const pageToLoad = reset ? 0 : catalogState.page + 1;
+    const opts = { page: pageToLoad, pageSize: catalogState.pageSize };
+    if (catalogState.filter === 'carro' || catalogState.filter === 'moto') opts.tipo = catalogState.filter;
+    if (catalogState.filter === 'consignado') opts.badge = 'consignado';
+
+    const loadMoreBtn = document.getElementById('loadMoreBtn');
+    loadMoreBtn.disabled = true;
+    try {
+      const { rows, total } = await HM.getVehicles(opts);
+      // "Ocultar veículos sem foto" é aplicado aqui, sobre a página já
+      // carregada — em catálogos muito grandes com essa opção ligada, a
+      // contagem de "carregar mais" pode ficar levemente conservadora
+      // (o total do servidor não desconta os sem foto); ver README.
+      const filtrados = cfg.nophoto ? rows.filter(v => v.img) : rows;
+      catalogState.page = pageToLoad;
+      catalogState.rows = reset ? filtrados : catalogState.rows.concat(filtrados);
+      catalogState.total = total;
+      renderVehicles();
+    } catch (err) {
+      console.error('[site] Falha ao carregar veículos.', err);
+      if (reset) {
+        document.getElementById('vehiclesGrid').innerHTML = `
+          <div class="vehicles-empty">
+            <p>Não foi possível carregar o estoque no momento. Tente novamente em instantes.</p>
+          </div>`;
+        loadMoreBtn.hidden = true;
+      }
+    } finally {
+      loadMoreBtn.disabled = false;
+    }
   }
 
   function renderCard(v) {
@@ -127,46 +156,54 @@
   }
 
   function renderVehicles() {
-    const all = getVisibleVehicles();
-    const list = currentFilter === 'todos' ? all
-      : currentFilter === 'consignado' ? all.filter(v => v.badge === 'consignado')
-      : all.filter(v => v.tipo === currentFilter);
-
+    const list = catalogState.rows;
     const grid = document.getElementById('vehiclesGrid');
+    const loadMoreBtn = document.getElementById('loadMoreBtn');
     if (!list.length) {
       grid.innerHTML = `
         <div class="vehicles-empty">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.5" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <p>Nenhum veículo encontrado com esse filtro no momento.</p>
         </div>`;
+      loadMoreBtn.hidden = true;
       return;
     }
     grid.innerHTML = list.map(renderCard).join('');
-
-    // Delegação de evento cobriria isso também, mas os cards são recriados
-    // a cada render — então religamos os botões de detalhe aqui.
     grid.querySelectorAll('[data-detail]').forEach(btn => {
       btn.addEventListener('click', () => openModal(btn.dataset.detail, btn));
     });
+    loadMoreBtn.hidden = list.length >= catalogState.total;
   }
 
   function setFilter(filter, btn) {
-    currentFilter = filter;
+    catalogState.filter = filter;
     document.querySelectorAll('.filter-btn').forEach(b => b.setAttribute('aria-pressed', 'false'));
     if (btn) btn.setAttribute('aria-pressed', 'true');
-    renderVehicles();
+    loadCatalogPage(true);
   }
+
+  document.getElementById('loadMoreBtn').addEventListener('click', () => loadCatalogPage(false));
 
   /* ── MODAL DE DETALHES (acessível: foco preso, ESC fecha, foco retorna ao gatilho) ── */
   function openModal(id, triggerEl) {
-    const v = vehiclesCache.find(x => x.id === id);
+    const v = catalogState.rows.find(x => x.id === id);
     if (!v) return;
     lastFocusedEl = triggerEl || document.activeElement;
 
     const wppMsg = `Olá! Vi o ${v.make} ${v.model} no site da Holanda Motors e gostaria de saber mais!`;
-    document.getElementById('modalImg').innerHTML = v.img
-      ? `<img src="${escapeHtml(v.img)}" alt="${escapeHtml(v.make + ' ' + v.model)}" style="width:100%;height:300px;object-fit:cover;display:block;">`
+    const fotos = (v.imagens && v.imagens.length ? v.imagens : (v.img ? [{ url: v.img }] : []));
+    renderModalImage(fotos[0] ? fotos[0].url : '', v);
+    document.getElementById('modalThumbs').innerHTML = fotos.length > 1
+      ? fotos.map((f, i) => `<button type="button" class="modal-thumb ${i === 0 ? 'active' : ''}" data-thumb="${escapeHtml(f.url)}"><img src="${escapeHtml(f.url)}" alt=""></button>`).join('')
       : '';
+    document.getElementById('modalThumbs').querySelectorAll('[data-thumb]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        renderModalImage(btn.dataset.thumb, v);
+        document.getElementById('modalThumbs').querySelectorAll('.modal-thumb').forEach(t => t.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
     document.getElementById('modalMake').textContent = v.make;
     document.getElementById('modalModel').textContent = v.model;
     document.getElementById('modalSpecs').innerHTML = `
@@ -190,6 +227,12 @@
     document.addEventListener('keydown', onModalKeydown);
   }
 
+  function renderModalImage(url, v) {
+    document.getElementById('modalImg').innerHTML = url
+      ? `<img src="${escapeHtml(url)}" alt="${escapeHtml(v.make + ' ' + v.model)}" style="width:100%;height:300px;object-fit:cover;display:block;">`
+      : '';
+  }
+
   function closeModal() {
     const overlay = document.getElementById('modalOverlay');
     overlay.classList.remove('open');
@@ -202,7 +245,6 @@
   function onModalKeydown(e) {
     if (e.key === 'Escape') { closeModal(); return; }
     if (e.key !== 'Tab') return;
-    // Prende o foco dentro do modal (focus trap simples)
     const overlay = document.getElementById('modalOverlay');
     const focusables = overlay.querySelectorAll('a[href], button:not([disabled])');
     if (!focusables.length) return;
@@ -244,7 +286,7 @@
   /* ── INIT ── */
   (async function init() {
     try {
-      [cfg, vehiclesCache] = await Promise.all([HM.getConfig(), HM.getVehicles()]);
+      cfg = await HM.getConfig();
     } catch (err) {
       console.error('[site] Falha ao carregar dados da loja.', err);
       document.getElementById('vehiclesGrid').innerHTML = `
@@ -255,6 +297,6 @@
     }
     applyConfig();
     renderHero();
-    renderVehicles();
+    loadCatalogPage(true);
   })();
 })();

@@ -9,6 +9,10 @@
 --
 -- Ver README.md → "Configurando o Supabase do zero" para o passo a passo
 -- completo (criação do projeto, chaves de API, criação do usuário admin).
+--
+-- O arquivo inteiro é idempotente — pode ser colado e executado de novo a
+-- qualquer momento (ex: depois de puxar uma atualização do projeto) sem
+-- duplicar tabelas, políticas ou dados.
 -- ============================================================================
 
 -- Necessário para gen_random_uuid()
@@ -203,10 +207,229 @@ create policy "veiculos_fotos_delete_auth" on storage.objects for delete
   using (bucket_id = 'veiculos-fotos' and auth.role() = 'authenticated');
 
 -- ============================================================================
+-- PARTE 2 — Auditoria pós-migração: correções e novas funcionalidades
+-- ----------------------------------------------------------------------------
+-- Todo este arquivo é seguro para reexecutar (idempotente): usa
+-- "if not exists" / "on conflict do nothing" / "drop ... if exists" em
+-- tudo. Se você já rodou a Parte 1 num projeto existente, pode colar o
+-- arquivo inteiro de novo no SQL Editor sem medo de duplicar nada.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Novas colunas em VEICULOS: placa (para a busca instantânea) e vendido
+-- (separado de "ativo" — ativo controla visibilidade no site, vendido é o
+-- status comercial; marcar como vendido também oculta do site, ver RLS abaixo)
+-- ----------------------------------------------------------------------------
+alter table veiculos add column if not exists placa text;
+alter table veiculos add column if not exists vendido boolean not null default false;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'veiculos_ano_valido') then
+    alter table veiculos add constraint veiculos_ano_valido check (ano between 1900 and 2100);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'veiculos_km_valido') then
+    alter table veiculos add constraint veiculos_km_valido check (km >= 0);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'veiculos_preco_valido') then
+    alter table veiculos add constraint veiculos_preco_valido check (preco >= 0);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'consignacoes_valor_valido') then
+    alter table consignacoes add constraint consignacoes_valor_valido check (valor is null or valor >= 0);
+  end if;
+end $$;
+
+-- Índices para desempenho conforme o estoque cresce, incluindo busca
+-- "contém" (ILIKE) por trigrama — usado pela pesquisa instantânea do painel.
+create extension if not exists pg_trgm;
+create index if not exists idx_veiculos_marca on veiculos (marca_id);
+create index if not exists idx_veiculos_vendido on veiculos (vendido);
+create index if not exists idx_veiculos_placa on veiculos (placa);
+create index if not exists idx_veiculos_modelo_trgm on veiculos using gin (modelo gin_trgm_ops);
+create index if not exists idx_veiculos_placa_trgm on veiculos using gin (placa gin_trgm_ops);
+create index if not exists idx_consignacoes_status on consignacoes (status);
+create index if not exists idx_consignacoes_placa on consignacoes (placa);
+
+-- No máximo uma foto "principal" por veículo — antes só a aplicação
+-- garantia isso; agora é uma constraint de banco também.
+create unique index if not exists idx_midias_veiculo_unico_principal
+  on midias_veiculo (veiculo_id) where principal = true;
+
+-- ----------------------------------------------------------------------------
+-- NÍVEIS DE ACESSO: administrador / gerente / vendedor
+-- ----------------------------------------------------------------------------
+alter table usuarios add column if not exists role text not null default 'vendedor';
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'usuarios_role_valido') then
+    alter table usuarios add constraint usuarios_role_valido check (role in ('administrador', 'gerente', 'vendedor'));
+  end if;
+end $$;
+
+-- Função auxiliar (SECURITY DEFINER para não recursar nas políticas de RLS
+-- de "usuarios" quando outras políticas a chamam).
+create or replace function public.current_user_role()
+returns text
+language sql
+security definer
+stable
+as $$
+  select role from public.usuarios where id = auth.uid();
+$$;
+grant execute on function public.current_user_role() to authenticated;
+
+-- Cria automaticamente o perfil em "usuarios" quando alguém é criado no
+-- Supabase Auth (dashboard → Authentication → Users). O primeiro usuário
+-- do sistema vira "administrador" automaticamente; os seguintes entram
+-- como "vendedor" por padrão — promova-os depois em Usuários no painel
+-- (ou na tabela "usuarios" do Table Editor).
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.usuarios (id, email, nome, role)
+  values (
+    new.id,
+    new.email,
+    coalesce(new.raw_user_meta_data ->> 'nome', split_part(new.email, '@', 1)),
+    case when exists (select 1 from public.usuarios) then 'vendedor' else 'administrador' end
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- Impede que um usuário promova a si mesmo (ou a qualquer um) alterando
+-- a própria coluna "role" — só quem já é administrador pode mudar papéis.
+-- Achado na auditoria: a política antiga de "update self" permitia isso.
+create or replace function public.prevent_role_self_escalation()
+returns trigger
+language plpgsql
+security definer
+as $$
+begin
+  if new.role is distinct from old.role and public.current_user_role() <> 'administrador' then
+    raise exception 'Apenas administradores podem alterar o nível de acesso de um usuário.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_prevent_role_self_escalation on usuarios;
+create trigger trg_prevent_role_self_escalation
+  before update on usuarios
+  for each row execute function public.prevent_role_self_escalation();
+
+-- ----------------------------------------------------------------------------
+-- LOGS_ACOES — trilha de auditoria (ações de usuários + histórico por
+-- veículo, filtrando por entidade/entidade_id). Somente leitura depois de
+-- inserido: não há política de update/delete, então nada pode alterar um
+-- log já gravado (nem o próprio autor).
+-- ----------------------------------------------------------------------------
+create table if not exists logs_acoes (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid references auth.users (id) on delete set null,
+  usuario_email text,
+  acao text not null,
+  entidade text not null,
+  entidade_id uuid,
+  detalhes jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_logs_acoes_entidade on logs_acoes (entidade, entidade_id);
+create index if not exists idx_logs_acoes_created on logs_acoes (created_at desc);
+create index if not exists idx_logs_acoes_usuario on logs_acoes (usuario_id);
+
+alter table logs_acoes enable row level security;
+
+drop policy if exists "logs_acoes_select_auth" on logs_acoes;
+create policy "logs_acoes_select_auth" on logs_acoes for select using (auth.role() = 'authenticated');
+drop policy if exists "logs_acoes_insert_self" on logs_acoes;
+create policy "logs_acoes_insert_self" on logs_acoes for insert with check (auth.role() = 'authenticated' and usuario_id = auth.uid());
+
+-- ----------------------------------------------------------------------------
+-- RPC: alterna "ativo" de forma atômica (UPDATE ... SET ativo = NOT ativo
+-- em uma única instrução). Achado na auditoria: o painel lia o estado atual
+-- do cache local antes de inverter, o que podia perder alterações feitas
+-- por outro usuário/aba entre a leitura e a escrita.
+-- ----------------------------------------------------------------------------
+create or replace function public.toggle_veiculo_ativo(p_id uuid)
+returns boolean
+language plpgsql
+security invoker
+as $$
+declare
+  novo_estado boolean;
+begin
+  update veiculos set ativo = not ativo, updated_at = now()
+  where id = p_id
+  returning ativo into novo_estado;
+
+  if novo_estado is null then
+    raise exception 'Veículo não encontrado.';
+  end if;
+  return novo_estado;
+end;
+$$;
+grant execute on function public.toggle_veiculo_ativo(uuid) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- RLS — ajustes por nível de acesso e correção de gaps encontrados na
+-- auditoria (todas recriadas com "drop policy if exists" antes, então é
+-- seguro reexecutar).
+-- ----------------------------------------------------------------------------
+
+-- Veículo vendido não aparece mais no site público mesmo que "ativo" não
+-- tenha sido desmarcado manualmente (defesa em profundidade).
+drop policy if exists "veiculos_select_public_ativos" on veiculos;
+create policy "veiculos_select_public_ativos" on veiculos for select using (ativo = true and vendido = false);
+
+-- Excluir veículo/consignação exige gerente ou administrador — vendedor
+-- pode cadastrar e editar, mas não apagar.
+drop policy if exists "veiculos_delete_auth" on veiculos;
+create policy "veiculos_delete_auth" on veiculos for delete using (public.current_user_role() in ('administrador', 'gerente'));
+
+drop policy if exists "consignacoes_auth_only" on consignacoes;
+create policy "consignacoes_select_auth" on consignacoes for select using (auth.role() = 'authenticated');
+create policy "consignacoes_insert_auth" on consignacoes for insert with check (auth.role() = 'authenticated');
+create policy "consignacoes_update_auth" on consignacoes for update using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+create policy "consignacoes_delete_auth" on consignacoes for delete using (public.current_user_role() in ('administrador', 'gerente'));
+
+-- Configurações da loja: só gerente/administrador altera.
+drop policy if exists "config_write_auth" on configuracoes_loja;
+create policy "config_write_auth" on configuracoes_loja for update using (public.current_user_role() in ('administrador', 'gerente')) with check (public.current_user_role() in ('administrador', 'gerente'));
+
+-- usuarios: restringe a leitura — antes qualquer autenticado via a lista
+-- completa de nomes/e-mails/papéis; agora só o próprio perfil, ou
+-- gerente/administrador vendo todos (a tela "Usuários" já é admin-only,
+-- isso fecha a mesma brecha para quem tentasse chamar a API direto).
+drop policy if exists "usuarios_select_auth" on usuarios;
+create policy "usuarios_select_auth" on usuarios for select
+  using (auth.uid() = id or public.current_user_role() in ('administrador', 'gerente'));
+
+-- um administrador também pode atualizar o perfil de OUTRO usuário
+-- (necessário para a tela de gestão de papéis); o gatilho acima garante
+-- que só ele pode mudar a coluna "role" especificamente.
+drop policy if exists "usuarios_update_self" on usuarios;
+create policy "usuarios_update_self" on usuarios for update
+  using (auth.uid() = id or public.current_user_role() = 'administrador')
+  with check (auth.uid() = id or public.current_user_role() = 'administrador');
+
+-- ============================================================================
 -- SEED — dados padrão (categorias, marcas do catálogo de demonstração e a
 -- linha única de configurações da loja). Os veículos/consignações de
 -- demonstração NÃO são semeados aqui — eles chegam via a rotina de migração
--- (migrar.html) a partir do que já está no localStorage do navegador, ou
+-- (migrar-localstorage.html) a partir do que já está no localStorage do navegador, ou
 -- você cadastra do zero pelo painel.
 -- ============================================================================
 
@@ -231,3 +454,20 @@ values (
   'Carros e motos seminovos com qualidade de showroom, atendimento transparente e o melhor preço de Sobral.'
 )
 on conflict (id) do nothing;
+
+-- ============================================================================
+-- PARTE 3 — Migração idempotente a partir do localStorage (migrar-localstorage.html)
+-- ----------------------------------------------------------------------------
+-- "legacy_id" guarda o id do registro no sistema antigo (localStorage).
+-- É assim que a página de migração sabe, mesmo em uma reexecução dias
+-- depois ou em outro computador, que um veículo/consignação já foi
+-- importado — sem isso, rodar a migração duas vezes duplicaria tudo.
+-- O índice é único mas parcial (só considera linhas com legacy_id
+-- preenchido), então não interfere em nada criado normalmente pelo painel.
+-- ============================================================================
+
+alter table veiculos add column if not exists legacy_id text;
+alter table consignacoes add column if not exists legacy_id text;
+
+create unique index if not exists idx_veiculos_legacy_id on veiculos (legacy_id) where legacy_id is not null;
+create unique index if not exists idx_consignacoes_legacy_id on consignacoes (legacy_id) where legacy_id is not null;

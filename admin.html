@@ -62,6 +62,14 @@
         Consignações
       </button></li>
       <li class="nav-section">Sistema</li>
+      <li><button class="nav-item" data-page="usuarios" data-min-role="administrador" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6M23 11h-6"/></svg>
+        Usuários
+      </button></li>
+      <li><button class="nav-item" data-page="logs" data-min-role="gerente" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        Logs
+      </button></li>
       <li><button class="nav-item" data-page="configuracoes">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
         Configurações
@@ -87,7 +95,8 @@
       </div>
       <div class="topbar-right">
         <div class="topbar-dot" aria-hidden="true"></div>
-        <span class="topbar-user">Gestor · Holanda Motors</span>
+        <span class="topbar-user" id="topbarUser">Gestor · Holanda Motors</span>
+        <span class="role-badge" id="roleBadge" hidden></span>
       </div>
     </div>
 
@@ -118,7 +127,7 @@
         </div>
         <div class="search-bar">
           <label class="sr-only" for="searchVehicle">Buscar veículo</label>
-          <input class="search-input" id="searchVehicle" placeholder="Buscar por marca, modelo, cor...">
+          <input class="search-input" id="searchVehicle" placeholder="Buscar por marca, modelo ou placa...">
           <label class="sr-only" for="filterTipo">Filtrar por tipo</label>
           <select class="filter-select" id="filterTipo">
             <option value="">Todos os tipos</option>
@@ -148,8 +157,12 @@
                 <th scope="col">Ações</th>
               </tr>
             </thead>
-            <tbody id="vehicleTableBody"></tbody>
+            <tbody id="vehicleTableBody" aria-live="polite"></tbody>
           </table>
+        </div>
+        <div class="list-footer">
+          <span class="list-count" id="vehicleListCount"></span>
+          <button class="btn-secondary" id="vehicleLoadMoreBtn" type="button" hidden>Carregar mais</button>
         </div>
       </section>
 
@@ -176,8 +189,69 @@
                 <th scope="col">Ações</th>
               </tr>
             </thead>
-            <tbody id="consigTableBody"></tbody>
+            <tbody id="consigTableBody" aria-live="polite"></tbody>
           </table>
+        </div>
+        <div class="list-footer">
+          <span class="list-count" id="consigListCount"></span>
+          <button class="btn-secondary" id="consigLoadMoreBtn" type="button" hidden>Carregar mais</button>
+        </div>
+      </section>
+
+      <!-- USUÁRIOS -->
+      <section class="page" id="page-usuarios">
+        <div class="section-header">
+          <h1 class="section-title">Usuários</h1>
+        </div>
+        <p class="page-hint">Para criar um novo administrador, adicione-o em <strong>Authentication → Users</strong> no dashboard do Supabase — veja "Como adicionar novos administradores" no README. Aqui você só ajusta o nível de acesso de quem já existe.</p>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">Lista de usuários do painel</caption>
+            <thead>
+              <tr>
+                <th scope="col">Nome</th>
+                <th scope="col">E-mail</th>
+                <th scope="col">Nível de acesso</th>
+                <th scope="col">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="usersTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- LOGS -->
+      <section class="page" id="page-logs">
+        <div class="section-header">
+          <h1 class="section-title">Logs de ações</h1>
+          <label class="sr-only" for="filterLogEntidade">Filtrar por área</label>
+          <select class="filter-select" id="filterLogEntidade">
+            <option value="">Todas as áreas</option>
+            <option value="veiculo">Veículos</option>
+            <option value="consignacao">Consignações</option>
+            <option value="config">Configurações</option>
+            <option value="usuario">Usuários</option>
+            <option value="sessao">Login</option>
+            <option value="backup">Backup</option>
+          </select>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">Trilha de auditoria de ações no painel</caption>
+            <thead>
+              <tr>
+                <th scope="col">Quando</th>
+                <th scope="col">Usuário</th>
+                <th scope="col">Ação</th>
+                <th scope="col">Detalhes</th>
+              </tr>
+            </thead>
+            <tbody id="logsTableBody" aria-live="polite"></tbody>
+          </table>
+        </div>
+        <div class="list-footer">
+          <span class="list-count" id="logsListCount"></span>
+          <button class="btn-secondary" id="logsLoadMoreBtn" type="button" hidden>Carregar mais</button>
         </div>
       </section>
 
@@ -230,6 +304,15 @@
                 A senha é alterada na sua conta do Supabase Auth. Para adicionar outro administrador, veja "Como adicionar novos administradores" no README.
               </p>
             </div>
+            <div class="config-section" id="backupSection" style="margin-top:20px" hidden>
+              <h2>Backup e restauração</h2>
+              <p class="page-hint" style="margin-bottom:16px">Exporta veículos, consignações, marcas e configurações em um arquivo JSON. Não inclui os arquivos de foto em si (só as URLs) — para backup completo do banco, veja "Backup e restauração" no README.</p>
+              <button class="btn-secondary" style="width:100%;justify-content:center;margin-bottom:12px" id="backupExportBtn" type="button">Baixar backup (JSON)</button>
+              <label class="sr-only" for="backupFileInput">Selecionar arquivo de backup</label>
+              <input type="file" id="backupFileInput" accept="application/json" style="margin-bottom:12px;font-size:12px">
+              <button class="btn-secondary" style="width:100%;justify-content:center" id="backupRestoreBtn" type="button">Restaurar backup</button>
+              <ul class="log-list" id="backupLog"></ul>
+            </div>
           </div>
         </div>
       </section>
@@ -249,24 +332,22 @@
     </div>
     <form class="modal-body" id="vehicleForm" novalidate>
       <input type="hidden" id="vId">
+      <input type="hidden" id="vUpdatedAt">
 
       <div class="form-row full" style="margin-bottom:20px">
         <div class="field">
-          <label id="uploadLabel">Foto do veículo</label>
+          <label id="uploadLabel">Fotos do veículo</label>
           <div class="img-upload-area" id="uploadArea">
-            <input type="file" id="imgFileInput" accept="image/*" aria-labelledby="uploadLabel">
+            <input type="file" id="imgFileInput" accept="image/*" multiple aria-labelledby="uploadLabel">
             <div id="uploadPlaceholder">
               <div class="upload-icon" aria-hidden="true">
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
               </div>
-              <p class="upload-text"><span>Clique para enviar</span> ou arraste a foto aqui</p>
-              <p class="upload-sub">JPG, PNG, WEBP — máx. 5MB</p>
-            </div>
-            <div class="img-preview-wrap" id="uploadPreviewWrap" style="display:none">
-              <img id="uploadPreview" class="img-preview" alt="Pré-visualização da foto do veículo">
-              <button type="button" class="img-remove" id="imgRemoveBtn" aria-label="Remover foto">✕</button>
+              <p class="upload-text"><span>Clique para enviar</span> ou arraste as fotos aqui</p>
+              <p class="upload-sub">JPG, PNG, WEBP — várias de uma vez, compactadas automaticamente</p>
             </div>
           </div>
+          <div class="img-gallery" id="imgGallery"></div>
           <div class="field" style="margin-top:8px">
             <label for="vImgUrl">Ou cole uma URL de imagem</label>
             <input type="url" id="vImgUrl" placeholder="https://...">
@@ -283,11 +364,12 @@
         <div class="field"><label for="vKm">KM *</label><input id="vKm" type="number" placeholder="18400" min="0" required></div>
         <div class="field"><label for="vColor">Cor</label><input id="vColor" placeholder="Ex: Branco Pérola"></div>
       </div>
-      <div class="form-row">
+      <div class="form-row three">
         <div class="field"><label for="vPrice">Preço *</label><input id="vPrice" placeholder="R$ 119.900" required></div>
         <div class="field"><label for="vTipo">Tipo *</label>
           <select id="vTipo"><option value="carro">Carro</option><option value="moto">Moto</option></select>
         </div>
+        <div class="field"><label for="vPlaca">Placa</label><input id="vPlaca" placeholder="ABC-1234" style="text-transform:uppercase"></div>
       </div>
       <div class="form-row">
         <div class="field"><label for="vCambio">Câmbio</label>
@@ -309,8 +391,15 @@
         <div class="field"><label for="vDesc">Descrição / Observações</label><textarea id="vDesc" placeholder="Único dono, revisões em dia, IPVA pago..."></textarea></div>
       </div>
       <p class="field-error" id="vehicleFormError" role="alert"></p>
+
+      <div id="vehicleHistoryWrap" hidden>
+        <h3 class="history-title">Histórico deste veículo</h3>
+        <ul class="log-list" id="vehicleHistoryList"></ul>
+      </div>
     </form>
     <div class="modal-footer">
+      <button class="btn-secondary" id="vehicleSoldBtn" type="button" hidden></button>
+      <span style="flex:1"></span>
       <button class="btn-secondary" id="vehicleCancelBtn">Cancelar</button>
       <button class="btn-primary" id="vehicleSaveBtn">Salvar veículo</button>
     </div>
@@ -326,6 +415,7 @@
     </div>
     <form class="modal-body" id="consigForm" novalidate>
       <input type="hidden" id="cId">
+      <input type="hidden" id="cUpdatedAt">
       <div class="form-row">
         <div class="field"><label for="cOwner">Nome do proprietário *</label><input id="cOwner" placeholder="Ex: João Silva" required></div>
         <div class="field"><label for="cContact">Contato (WhatsApp) *</label><input id="cContact" placeholder="(85) 99999-9999" required></div>

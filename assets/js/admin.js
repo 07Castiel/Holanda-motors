@@ -1,8 +1,12 @@
 /**
  * admin.js — lógica do painel do gestor (admin.html)
- * Toda leitura/escrita de dados passa por HM (data.js), a mesma camada
- * usada pelo site público. HM fala com o Supabase — autenticação real
+ * Toda leitura/escrita de dados passa por HM (data.js) — autenticação real
  * (Supabase Auth), banco (Postgres com RLS) e fotos (Supabase Storage).
+ *
+ * Este arquivo mantém o estado das listas paginadas (veículos, consignações,
+ * logs) em módulo-escopo, para que cada mutação atualize esse estado local
+ * em vez de refazer a consulta inteira sempre que possível — e para que
+ * dashboard e tabela nunca disparem a mesma consulta duas vezes.
  */
 (function () {
   'use strict';
@@ -11,10 +15,22 @@
   const badgeCls = { seminovo: 'badge-seminovo', consignado: 'badge-consignado', destaque: 'badge-destaque' };
   const consigStatusLabels = { ativo: 'Disponível', negociando: 'Em negociação', vendido: 'Vendido', devolvido: 'Devolvido' };
   const consigStatusCls = { ativo: 'badge-ativo', negociando: 'badge-negociando', vendido: 'badge-seminovo', devolvido: 'badge-inativo' };
+  const ROLE_ORDER = { vendedor: 1, gerente: 2, administrador: 3 };
+  const ROLE_LABELS = { administrador: 'Administrador', gerente: 'Gerente', vendedor: 'Vendedor' };
 
-  let currentImg = '';
+  const ICON_EYE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const ICON_EYE_OFF = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+  const ICON_EDIT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
+  const ICON_DEL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6m4-6v6"/><path d="M9 6V4h6v2"/></svg>';
+  const ICON_TAG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20.59 13.41L11 3.83A2 2 0 009.59 3.24L4 3a1 1 0 00-1 1l.24 5.59a2 2 0 00.59 1.41l9.58 9.58a2 2 0 002.83 0l4.35-4.35a2 2 0 000-2.82z"/><circle cx="8" cy="8" r="1.5"/></svg>';
+
   let lastFocusedEl = null;
   let pendingDelete = { type: null, id: null };
+  let currentRole = 'vendedor';
+  let currentUserId = '';
+  let currentUserEmail = '';
+
+  function roleAtLeast(min) { return (ROLE_ORDER[currentRole] || 0) >= (ROLE_ORDER[min] || 0); }
 
   /* ── AUTENTICAÇÃO (Supabase Auth) ── */
   document.getElementById('loginForm').addEventListener('submit', async e => {
@@ -44,7 +60,14 @@
   async function enterAdminApp() {
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('adminApp').style.display = 'block';
-    await Promise.all([renderDashboard(), renderVehicleTable(), renderConsigTable(), loadConfigForm()]);
+    const profile = await HM.getCurrentUserProfile();
+    currentRole = profile ? profile.role : 'vendedor';
+    currentUserId = profile ? profile.id : '';
+    currentUserEmail = profile ? profile.email : '';
+    applyRolePermissions();
+    resetVehicleState();
+    resetConsigState();
+    await Promise.all([renderDashboard(), loadVehiclePage(true), loadConsigPage(true), loadConfigForm()]);
     checkMobile();
   }
 
@@ -57,13 +80,45 @@
 
   /** Ao carregar a página, mantém a sessão se o gestor já estiver autenticado. */
   (async function initSession() {
-    const session = await HM.getSession();
-    if (session) await enterAdminApp();
-    else showLoginScreen();
+    try {
+      const session = await HM.getSession();
+      if (session) await enterAdminApp();
+      else showLoginScreen();
+    } catch (err) {
+      console.error('[admin] Falha ao verificar sessão.', err);
+      showLoginScreen();
+      document.getElementById('loginError').textContent = 'Não foi possível conectar ao Supabase. Verifique sua conexão ou a configuração em supabase-client.js.';
+    }
   })();
 
+  /** Desloga automaticamente se a sessão expirar/for encerrada em outra aba. */
+  HM.onAuthStateChange((session, event) => {
+    if (event === 'SIGNED_OUT' && document.getElementById('adminApp').style.display !== 'none') {
+      showLoginScreen();
+    }
+  });
+
+  function applyRolePermissions() {
+    const badge = document.getElementById('roleBadge');
+    badge.hidden = false;
+    badge.textContent = ROLE_LABELS[currentRole] || currentRole;
+    badge.className = `role-badge ${currentRole}`;
+    document.getElementById('topbarUser').textContent = currentUserEmail || 'Gestor · Holanda Motors';
+
+    document.querySelectorAll('.nav-item[data-min-role]').forEach(btn => {
+      btn.hidden = !roleAtLeast(btn.dataset.minRole);
+    });
+
+    const podeConfig = roleAtLeast('gerente');
+    document.getElementById('saveConfigBtn').style.display = podeConfig ? '' : 'none';
+    document.querySelectorAll('#page-configuracoes input, #page-configuracoes textarea').forEach(el => {
+      if (el.id.startsWith('cfg-')) el.disabled = !podeConfig;
+    });
+    document.getElementById('backupSection').hidden = !podeConfig;
+  }
+
   /* ── NAVEGAÇÃO ── */
-  const titles = { dashboard: 'Dashboard', veiculos: 'Veículos', consignacoes: 'Consignações', configuracoes: 'Configurações' };
+  const titles = { dashboard: 'Dashboard', veiculos: 'Veículos', consignacoes: 'Consignações', usuarios: 'Usuários', logs: 'Logs', configuracoes: 'Configurações' };
   document.querySelectorAll('.nav-item[data-page]').forEach(btn => {
     btn.addEventListener('click', () => navigate(btn.dataset.page, btn));
   });
@@ -75,6 +130,8 @@
     document.getElementById('topbarTitle').textContent = titles[page] || page;
     if (window.innerWidth < 900) closeSidebar();
     document.getElementById('mainContent').focus?.();
+    if (page === 'usuarios') renderUsersTable();
+    if (page === 'logs') loadLogsPage(true);
   }
 
   const sidebar = document.getElementById('sidebar');
@@ -88,42 +145,9 @@
     menuToggle.setAttribute('aria-expanded', 'false');
   }
   function checkMobile() {
-    // O botão de menu já fica oculto/visível via CSS (@media), isso só
-    // garante que o estado aria-expanded comece coerente.
     menuToggle.setAttribute('aria-expanded', 'false');
   }
   window.addEventListener('resize', () => { if (window.innerWidth >= 900) closeSidebar(); });
-
-  /* ── DASHBOARD ── */
-  async function renderDashboard() {
-    const [vs, cs] = await Promise.all([HM.getVehicles(), HM.getConsigs()]);
-    const ativos = vs.filter(v => v.ativo);
-    const carros = vs.filter(v => v.tipo === 'carro');
-    const motos = vs.filter(v => v.tipo === 'moto');
-    const consigs = vs.filter(v => v.badge === 'consignado');
-    const destaque = vs.filter(v => v.badge === 'destaque');
-
-    document.getElementById('dashStats').innerHTML = `
-      <div class="stat-card blue"><div class="stat-card-label">Total em estoque</div><div class="stat-card-val">${vs.length}</div><div class="stat-card-sub">${ativos.length} visíveis no site</div></div>
-      <div class="stat-card green"><div class="stat-card-label">Carros</div><div class="stat-card-val">${carros.length}</div><div class="stat-card-sub">Em ${vs.length} veículos</div></div>
-      <div class="stat-card yellow"><div class="stat-card-label">Motos</div><div class="stat-card-val">${motos.length}</div><div class="stat-card-sub">Em ${vs.length} veículos</div></div>
-      <div class="stat-card red-c"><div class="stat-card-label">Consignações</div><div class="stat-card-val">${cs.length}</div><div class="stat-card-sub">${cs.filter(c => c.status === 'ativo').length} disponíveis</div></div>
-    `;
-
-    const pct = (n) => vs.length ? Math.round(n / vs.length * 100) : 0;
-    document.getElementById('typeBars').innerHTML = `
-      <div class="type-bar"><div class="type-bar-label">Carros</div><div class="type-bar-track"><div class="type-bar-fill" style="width:${pct(carros.length)}%"></div></div><div class="type-bar-count">${carros.length}</div></div>
-      <div class="type-bar"><div class="type-bar-label">Motos</div><div class="type-bar-track"><div class="type-bar-fill" style="width:${pct(motos.length)}%;background:var(--yellow)"></div></div><div class="type-bar-count">${motos.length}</div></div>
-      <div class="type-bar"><div class="type-bar-label">Consignados</div><div class="type-bar-track"><div class="type-bar-fill" style="width:${pct(consigs.length)}%;background:var(--green)"></div></div><div class="type-bar-count">${consigs.length}</div></div>
-      <div class="type-bar"><div class="type-bar-label">Destaque</div><div class="type-bar-track"><div class="type-bar-fill" style="width:${pct(destaque.length)}%;background:var(--blue)"></div></div><div class="type-bar-count">${destaque.length}</div></div>
-    `;
-
-    const acts = await HM.getActivity();
-    const colors = { verde: 'var(--green)', amarelo: 'var(--yellow)', vermelho: 'var(--red)', azul: 'var(--blue)' };
-    document.getElementById('activityList').innerHTML = acts.length
-      ? acts.slice(0, 8).map(a => `<li class="activity-item"><span class="activity-dot" style="background:${colors[a.color] || 'var(--gray)'}"></span><span>${escapeHtml(a.msg)}</span><span class="activity-time">${a.time}</span></li>`).join('')
-      : '<li class="activity-item"><span class="activity-dot" style="background:var(--gray)"></span><span style="color:var(--gray)">Nenhuma atividade ainda.</span></li>';
-  }
 
   function escapeHtml(str) {
     const div = document.createElement('div');
@@ -131,74 +155,139 @@
     return div.innerHTML;
   }
 
-  /* ── TABELA DE VEÍCULOS ── */
-  document.getElementById('searchVehicle').addEventListener('input', renderVehicleTable);
-  document.getElementById('filterTipo').addEventListener('change', renderVehicleTable);
-  document.getElementById('filterBadge').addEventListener('change', renderVehicleTable);
-
-  async function renderVehicleTable() {
-    let vs;
+  /* ── DASHBOARD ── */
+  async function renderDashboard() {
+    let stats, consigStats, acts;
     try {
-      vs = await HM.getVehicles();
+      [stats, consigStats, acts] = await Promise.all([HM.getVehicleStats(), HM.getConsigStats(), HM.getActivity()]);
+    } catch (err) {
+      console.error('[admin] Falha ao carregar o dashboard.', err);
+      toast('Não foi possível carregar o dashboard.', 'error');
+      return;
+    }
+
+    document.getElementById('dashStats').innerHTML = `
+      <div class="stat-card blue"><div class="stat-card-label">Total cadastrados</div><div class="stat-card-val">${stats.total}</div><div class="stat-card-sub">${stats.ativos} visíveis no site</div></div>
+      <div class="stat-card green"><div class="stat-card-label">Vendidos</div><div class="stat-card-val">${stats.vendidos}</div><div class="stat-card-sub">de ${stats.total} cadastrados</div></div>
+      <div class="stat-card yellow"><div class="stat-card-label">Destaques</div><div class="stat-card-val">${stats.destaque}</div><div class="stat-card-sub">exibidos no hero do site</div></div>
+      <div class="stat-card red-c"><div class="stat-card-label">Consignações</div><div class="stat-card-val">${consigStats.total}</div><div class="stat-card-sub">${consigStats.ativas} disponíveis</div></div>
+    `;
+
+    const pct = (n) => stats.total ? Math.round(n / stats.total * 100) : 0;
+    document.getElementById('typeBars').innerHTML = `
+      <div class="type-bar"><div class="type-bar-label">Carros</div><div class="type-bar-track"><div class="type-bar-fill" style="width:${pct(stats.carros)}%"></div></div><div class="type-bar-count">${stats.carros}</div></div>
+      <div class="type-bar"><div class="type-bar-label">Motos</div><div class="type-bar-track"><div class="type-bar-fill" style="width:${pct(stats.motos)}%;background:var(--yellow)"></div></div><div class="type-bar-count">${stats.motos}</div></div>
+      <div class="type-bar"><div class="type-bar-label">Consignados</div><div class="type-bar-track"><div class="type-bar-fill" style="width:${pct(stats.consignados)}%;background:var(--green)"></div></div><div class="type-bar-count">${stats.consignados}</div></div>
+      <div class="type-bar"><div class="type-bar-label">Destaque</div><div class="type-bar-track"><div class="type-bar-fill" style="width:${pct(stats.destaque)}%;background:var(--blue)"></div></div><div class="type-bar-count">${stats.destaque}</div></div>
+    `;
+
+    const colors = { verde: 'var(--green)', amarelo: 'var(--yellow)', vermelho: 'var(--red)', azul: 'var(--blue)' };
+    document.getElementById('activityList').innerHTML = acts.length
+      ? acts.map(a => `<li class="activity-item"><span class="activity-dot" style="background:${colors[a.color] || 'var(--gray)'}"></span><span>${escapeHtml(a.msg)}</span><span class="activity-time">${a.time}</span></li>`).join('')
+      : '<li class="activity-item"><span class="activity-dot" style="background:var(--gray)"></span><span style="color:var(--gray)">Nenhuma atividade ainda.</span></li>';
+  }
+
+  /* ── TABELA DE VEÍCULOS (paginada + busca instantânea) ── */
+  let vehicleState = { page: 0, pageSize: 20, search: '', tipo: '', badge: '', rows: [], total: 0 };
+  function resetVehicleState() { vehicleState = { page: 0, pageSize: 20, search: '', tipo: '', badge: '', rows: [], total: 0 }; }
+
+  let searchDebounceTimer = null;
+  document.getElementById('searchVehicle').addEventListener('input', e => {
+    clearTimeout(searchDebounceTimer);
+    const valor = e.target.value;
+    searchDebounceTimer = setTimeout(() => { vehicleState.search = valor; loadVehiclePage(true); }, 250);
+  });
+  document.getElementById('filterTipo').addEventListener('change', e => { vehicleState.tipo = e.target.value; loadVehiclePage(true); });
+  document.getElementById('filterBadge').addEventListener('change', e => { vehicleState.badge = e.target.value; loadVehiclePage(true); });
+  document.getElementById('vehicleLoadMoreBtn').addEventListener('click', () => loadVehiclePage(false));
+
+  async function loadVehiclePage(reset) {
+    const pageToLoad = reset ? 0 : vehicleState.page + 1;
+    const loadMoreBtn = document.getElementById('vehicleLoadMoreBtn');
+    loadMoreBtn.disabled = true;
+    try {
+      const { rows, total } = await HM.getVehicles({ page: pageToLoad, pageSize: vehicleState.pageSize, search: vehicleState.search, tipo: vehicleState.tipo, badge: vehicleState.badge });
+      vehicleState.page = pageToLoad;
+      vehicleState.rows = reset ? rows : vehicleState.rows.concat(rows);
+      vehicleState.total = total;
+      renderVehicleTable();
     } catch (err) {
       console.error('[admin] Falha ao carregar veículos.', err);
       toast('Não foi possível carregar os veículos.', 'error');
-      return;
+    } finally {
+      loadMoreBtn.disabled = false;
     }
-    const q = (document.getElementById('searchVehicle').value || '').toLowerCase();
-    const ft = document.getElementById('filterTipo').value;
-    const fb = document.getElementById('filterBadge').value;
-    const filtered = vs.filter(v => {
-      const match = !q || `${v.make} ${v.model} ${v.cor || ''}`.toLowerCase().includes(q);
-      return match && (!ft || v.tipo === ft) && (!fb || v.badge === fb);
-    });
-    const tbody = document.getElementById('vehicleTableBody');
-    if (!filtered.length) {
-      tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><p>Nenhum veículo encontrado.</p></div></td></tr>`;
-      return;
-    }
-    tbody.innerHTML = filtered.map(v => `
+  }
+
+  function vehicleRowHtml(v) {
+    const subParts = [v.cor || '—', v.combustivel || '—'];
+    if (v.placa) subParts.push(`Placa ${v.placa}`);
+    const visivelBadge = v.vendido
+      ? `<span class="badge badge-vendido">Vendido</span>`
+      : `<span class="badge ${v.ativo ? 'badge-ativo' : 'badge-inativo'}">${v.ativo ? 'Visível' : 'Oculto'}</span>`;
+    const podeExcluir = roleAtLeast('gerente');
+    return `
       <tr>
         <td>${v.img ? `<img class="td-img" src="${escapeHtml(v.img)}" alt="">` : `<div class="td-img" aria-hidden="true"></div>`}</td>
-        <td><div class="td-name">${escapeHtml(v.make)} ${escapeHtml(v.model)}</div><div class="td-sub">${escapeHtml(v.cor || '—')} · ${escapeHtml(v.combustivel || '—')}</div></td>
+        <td><div class="td-name">${escapeHtml(v.make)} ${escapeHtml(v.model)}</div><div class="td-sub">${subParts.map(s => escapeHtml(s)).join(' · ')}</div></td>
         <td>${v.year} <span style="color:var(--gray)">/ ${Number(v.km).toLocaleString('pt-BR')} km</span></td>
         <td style="font-weight:700">${escapeHtml(v.price)}</td>
         <td style="text-transform:capitalize">${v.tipo}</td>
         <td><span class="badge ${badgeCls[v.badge]}">${badgeLabels[v.badge] || v.badge}</span></td>
-        <td><span class="badge ${v.ativo ? 'badge-ativo' : 'badge-inativo'}">${v.ativo ? 'Visível' : 'Oculto'}</span></td>
+        <td>${visivelBadge}</td>
         <td>
           <div class="actions">
-            <button class="btn-icon toggle" type="button" data-toggle="${v.id}" aria-label="${v.ativo ? 'Ocultar do site' : 'Exibir no site'}">${v.ativo
-              ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
-              : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'}</button>
-            <button class="btn-icon edit" type="button" data-edit="${v.id}" aria-label="Editar ${escapeHtml(v.make)} ${escapeHtml(v.model)}">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-            </button>
-            <button class="btn-icon del" type="button" data-del="${v.id}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="Excluir ${escapeHtml(v.make)} ${escapeHtml(v.model)}">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6m4-6v6"/><path d="M9 6V4h6v2"/></svg>
-            </button>
+            <button class="btn-icon toggle" type="button" data-toggle="${v.id}" ${v.vendido ? 'disabled' : ''} aria-label="${v.ativo ? 'Ocultar do site' : 'Exibir no site'}">${v.ativo ? ICON_EYE_OFF : ICON_EYE}</button>
+            <button class="btn-icon sold" type="button" data-sold="${v.id}" data-vendido="${v.vendido ? '1' : '0'}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="${v.vendido ? 'Reverter para disponível' : 'Marcar como vendido'}">${ICON_TAG}</button>
+            <button class="btn-icon edit" type="button" data-edit="${v.id}" aria-label="Editar ${escapeHtml(v.make)} ${escapeHtml(v.model)}">${ICON_EDIT}</button>
+            ${podeExcluir ? `<button class="btn-icon del" type="button" data-del="${v.id}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="Excluir ${escapeHtml(v.make)} ${escapeHtml(v.model)}">${ICON_DEL}</button>` : ''}
           </div>
         </td>
-      </tr>
-    `).join('');
-
-    tbody.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', () => toggleVisible(b.dataset.toggle, vs)));
-    tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openVehicleModal(b.dataset.edit, b, vs)));
-    tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => confirmDelete('vehicle', b.dataset.del, b.dataset.label, b)));
+      </tr>`;
   }
 
-  async function toggleVisible(id, cachedList) {
-    const v = cachedList.find(x => x.id === id);
-    if (!v) return;
-    const novoAtivo = !v.ativo;
+  function renderVehicleTable() {
+    const vs = vehicleState.rows;
+    const tbody = document.getElementById('vehicleTableBody');
+    if (!vs.length) {
+      tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><p>Nenhum veículo encontrado.</p></div></td></tr>`;
+    } else {
+      tbody.innerHTML = vs.map(vehicleRowHtml).join('');
+      tbody.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', () => toggleVisible(b.dataset.toggle)));
+      tbody.querySelectorAll('[data-sold]').forEach(b => b.addEventListener('click', () => markSold(b.dataset.sold, b.dataset.label, b.dataset.vendido === '1')));
+      tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openVehicleModal(b.dataset.edit, b)));
+      tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => confirmDelete('vehicle', b.dataset.del, b.dataset.label, b)));
+    }
+    document.getElementById('vehicleListCount').textContent = vs.length ? `Mostrando ${vs.length} de ${vehicleState.total}` : '';
+    document.getElementById('vehicleLoadMoreBtn').hidden = vs.length >= vehicleState.total;
+  }
+
+  async function toggleVisible(id) {
     try {
-      await HM.toggleVehicleAtivo(id, novoAtivo);
-      await HM.logActivity(`${v.make} ${v.model} ${novoAtivo ? 'exibido' : 'ocultado'} no site`, novoAtivo ? 'verde' : 'amarelo');
-      await Promise.all([renderVehicleTable(), renderDashboard()]);
-      toast(novoAtivo ? 'Veículo exibido no site.' : 'Veículo ocultado do site.', 'success');
+      const novoEstado = await HM.toggleVehicleAtivo(id);
+      const v = vehicleState.rows.find(x => x.id === id);
+      if (v) v.ativo = novoEstado;
+      renderVehicleTable();
+      renderDashboard();
+      toast(novoEstado ? 'Veículo exibido no site.' : 'Veículo ocultado do site.', 'success');
     } catch (err) {
       console.error('[admin] Falha ao alterar visibilidade.', err);
       toast('Não foi possível alterar a visibilidade do veículo.', 'error');
+    }
+  }
+
+  async function markSold(id, label, vendidoAtual) {
+    const novo = !vendidoAtual;
+    try {
+      await HM.setVehicleVendido(id, novo, label);
+      const v = vehicleState.rows.find(x => x.id === id);
+      if (v) { v.vendido = novo; if (novo) v.ativo = false; }
+      renderVehicleTable();
+      renderDashboard();
+      toast(novo ? 'Veículo marcado como vendido.' : 'Veículo revertido para disponível.', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao atualizar status de venda.', err);
+      toast('Não foi possível atualizar o status de venda.', 'error');
     }
   }
 
@@ -212,41 +301,62 @@
   document.getElementById('vehicleSaveBtn').addEventListener('click', saveVehicle);
   vehicleOverlay.addEventListener('click', e => { if (e.target === e.currentTarget) closeVehicleModal(); });
 
-  async function openVehicleModal(id, triggerEl, cachedList) {
-    currentImg = '';
+  function openVehicleModal(id, triggerEl) {
+    resetGallery();
     lastFocusedEl = triggerEl || document.activeElement;
     document.getElementById('vehicleFormError').textContent = '';
 
-    // Reseta TODOS os campos, incluindo os <select> — sem isso, abrir "Novo
-    // veículo" logo após editar um herdava os valores do veículo anterior.
-    ['vId', 'vMake', 'vModel', 'vYear', 'vKm', 'vPrice', 'vColor', 'vDesc', 'vImgUrl'].forEach(f => { document.getElementById(f).value = ''; });
+    ['vId', 'vUpdatedAt', 'vMake', 'vModel', 'vYear', 'vKm', 'vPrice', 'vColor', 'vPlaca', 'vDesc', 'vImgUrl'].forEach(f => { document.getElementById(f).value = ''; });
     Object.entries(vehicleDefaults).forEach(([f, val]) => { document.getElementById(f).value = val; });
 
     document.getElementById('vehicleModalTitle').textContent = id ? 'Editar Veículo' : 'Novo Veículo';
-    resetImgUpload();
+    document.getElementById('vehicleSoldBtn').hidden = !id;
+    document.getElementById('vehicleHistoryWrap').hidden = !id;
 
     if (id) {
-      const list = cachedList || await HM.getVehicles();
-      const v = list.find(x => x.id === id);
+      const v = vehicleState.rows.find(x => x.id === id);
       if (!v) return;
       document.getElementById('vId').value = v.id;
+      document.getElementById('vUpdatedAt').value = v.updatedAt || '';
       document.getElementById('vMake').value = v.make;
       document.getElementById('vModel').value = v.model;
       document.getElementById('vYear').value = v.year;
       document.getElementById('vKm').value = v.km;
       document.getElementById('vPrice').value = v.price;
       document.getElementById('vColor').value = v.cor || '';
+      document.getElementById('vPlaca').value = v.placa || '';
       document.getElementById('vDesc').value = v.desc || '';
       document.getElementById('vTipo').value = v.tipo;
       document.getElementById('vBadge').value = v.badge;
       document.getElementById('vCambio').value = v.cambio || 'Automático';
       document.getElementById('vCombustivel').value = v.combustivel || 'Flex';
       document.getElementById('vAtivo').value = v.ativo ? '1' : '0';
-      if (v.img) document.getElementById('vImgUrl').value = v.img;
+      galleryImages = (v.imagens || []).map(img => ({ id: img.id, file: null, url: img.url, previewUrl: img.url, principal: img.principal }));
+      renderGallery();
+
+      const soldBtn = document.getElementById('vehicleSoldBtn');
+      soldBtn.textContent = v.vendido ? 'Reverter venda' : 'Marcar como vendido';
+      soldBtn.onclick = () => markSold(v.id, `${v.make} ${v.model}`, v.vendido).then(closeVehicleModal);
+
+      loadVehicleHistory(v.id);
     }
     openModal(vehicleOverlay, document.getElementById('vMake'));
   }
-  function closeVehicleModal() { closeModalEl(vehicleOverlay); resetImgUpload(); }
+  function closeVehicleModal() { closeModalEl(vehicleOverlay); resetGallery(); }
+
+  async function loadVehicleHistory(vehicleId) {
+    const list = document.getElementById('vehicleHistoryList');
+    list.innerHTML = '<li class="log-empty">Carregando…</li>';
+    try {
+      const { rows } = await HM.getLogs({ entidade: 'veiculo', entidadeId: vehicleId, pageSize: 15 });
+      list.innerHTML = rows.length
+        ? rows.map(l => `<li><strong>${escapeHtml(l.usuario_email ? l.usuario_email.split('@')[0] : 'Alguém')}</strong> ${escapeHtml((l.detalhes && l.detalhes.resumo) || l.acao)} <span style="float:right;color:var(--gray)">${new Date(l.created_at).toLocaleString('pt-BR')}</span></li>`).join('')
+        : '<li class="log-empty">Sem histórico registrado ainda.</li>';
+    } catch (err) {
+      console.error('[admin] Falha ao carregar histórico do veículo.', err);
+      list.innerHTML = '<li class="log-empty">Não foi possível carregar o histórico.</li>';
+    }
+  }
 
   async function saveVehicle() {
     const make = document.getElementById('vMake').value.trim();
@@ -256,32 +366,23 @@
     const price = document.getElementById('vPrice').value.trim();
     const errEl = document.getElementById('vehicleFormError');
 
-    if (!make || !model || !price || !year || km === '') {
-      errEl.textContent = 'Preencha todos os campos obrigatórios (*).';
-      return;
-    }
-    if (year < 1990 || year > 2027) {
-      errEl.textContent = 'Informe um ano de fabricação válido.';
-      return;
-    }
-    if (Number(km) < 0) {
-      errEl.textContent = 'A quilometragem não pode ser negativa.';
-      return;
-    }
+    if (!make || !model || !price || !year || km === '') { errEl.textContent = 'Preencha todos os campos obrigatórios (*).'; return; }
+    if (year < 1990 || year > 2027) { errEl.textContent = 'Informe um ano de fabricação válido.'; return; }
+    if (Number(km) < 0) { errEl.textContent = 'A quilometragem não pode ser negativa.'; return; }
+    if (galleryImages.some(i => i.uploading)) { errEl.textContent = 'Aguarde a compactação das fotos terminar.'; return; }
     errEl.textContent = '';
 
-    const imgUrl = document.getElementById('vImgUrl').value.trim();
-    const img = currentImg || imgUrl || '';
     const editId = document.getElementById('vId').value;
     const data = {
       make, model, year, km: Number(km), price,
       cor: document.getElementById('vColor').value.trim(),
+      placa: document.getElementById('vPlaca').value.trim().toUpperCase(),
       tipo: document.getElementById('vTipo').value,
       badge: document.getElementById('vBadge').value,
       cambio: document.getElementById('vCambio').value,
       combustivel: document.getElementById('vCombustivel').value,
       ativo: Number(document.getElementById('vAtivo').value),
-      img,
+      images: galleryImages,
       desc: document.getElementById('vDesc').value.trim(),
     };
 
@@ -289,113 +390,140 @@
     saveBtn.disabled = true;
     try {
       if (editId) {
+        data.expectedUpdatedAt = document.getElementById('vUpdatedAt').value || null;
         await HM.updateVehicle(editId, data);
-        await HM.logActivity(`${make} ${model} atualizado`, 'azul');
         toast('Veículo atualizado com sucesso!', 'success');
       } else {
         await HM.createVehicle(data);
-        await HM.logActivity(`${make} ${model} adicionado ao estoque`, 'verde');
         toast('Veículo adicionado com sucesso!', 'success');
       }
-      await Promise.all([renderVehicleTable(), renderDashboard()]);
+      await Promise.all([loadVehiclePage(true), renderDashboard()]);
       closeVehicleModal();
     } catch (err) {
       console.error('[admin] Falha ao salvar veículo.', err);
-      errEl.textContent = 'Não foi possível salvar o veículo. Tente novamente.';
+      errEl.textContent = (err instanceof HM.ConcurrencyError) ? err.message : 'Não foi possível salvar o veículo. Tente novamente.';
     } finally {
       saveBtn.disabled = false;
     }
   }
 
-  /* ── UPLOAD DE IMAGEM ── */
+  /* ── GALERIA DE FOTOS (múltiplas, arrastar-e-soltar, compactação automática) ── */
+  let galleryImages = []; // { id, file, url, previewUrl, principal, uploading }
   const uploadArea = document.getElementById('uploadArea');
   const imgFileInput = document.getElementById('imgFileInput');
-  const vImgUrl = document.getElementById('vImgUrl');
+  const vImgUrlInput = document.getElementById('vImgUrl');
 
-  imgFileInput.addEventListener('change', e => handleImageFile(e.target.files[0]));
-  document.getElementById('imgRemoveBtn').addEventListener('click', e => {
-    e.preventDefault(); e.stopPropagation();
-    currentImg = ''; resetImgUpload(); vImgUrl.value = '';
-  });
-  vImgUrl.addEventListener('input', () => {
-    const url = vImgUrl.value.trim();
-    if (!url) { resetImgUpload(); return; }
-    currentImg = '';
-    showImgPreview(url);
-  });
+  function resetGallery() { galleryImages = []; renderGallery(); }
+
+  function renderGallery() {
+    const wrap = document.getElementById('imgGallery');
+    wrap.innerHTML = galleryImages.map((img, idx) => `
+      <div class="img-gallery-item ${img.uploading ? 'uploading' : ''}">
+        <img src="${escapeHtml(img.previewUrl || img.url)}" alt="">
+        ${img.principal ? '<span class="gallery-principal-tag">Capa</span>' : ''}
+        <div class="gallery-actions">
+          <button type="button" class="gallery-btn star ${img.principal ? 'is-principal' : ''}" data-star="${idx}" aria-label="Definir como capa" title="Definir como capa">★</button>
+          <button type="button" class="gallery-btn" data-removeimg="${idx}" aria-label="Remover foto" title="Remover">✕</button>
+        </div>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-star]').forEach(b => b.addEventListener('click', () => {
+      const i = Number(b.dataset.star);
+      galleryImages.forEach((im, idx) => { im.principal = idx === i; });
+      renderGallery();
+    }));
+    wrap.querySelectorAll('[data-removeimg]').forEach(b => b.addEventListener('click', () => {
+      const i = Number(b.dataset.removeimg);
+      const removida = galleryImages.splice(i, 1)[0];
+      if (removida && removida.principal && galleryImages.length) galleryImages[0].principal = true;
+      renderGallery();
+    }));
+  }
+
+  async function addFilesToGallery(fileList) {
+    const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
+    if (!files.length) { toast('Selecione arquivos de imagem válidos.', 'error'); return; }
+    for (const file of files) {
+      if (file.size > 15 * 1024 * 1024) { toast(`"${file.name}" é grande demais (máx. 15MB antes da compactação).`, 'error'); continue; }
+      const item = { id: null, file: null, url: '', previewUrl: URL.createObjectURL(file), principal: galleryImages.length === 0, uploading: true };
+      galleryImages.push(item);
+      renderGallery();
+      item.file = await HM.compressImage(file);
+      item.uploading = false;
+      renderGallery();
+    }
+  }
+
+  imgFileInput.addEventListener('change', e => { addFilesToGallery(e.target.files); e.target.value = ''; });
   uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('drag'); });
   uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('drag'));
   uploadArea.addEventListener('drop', e => {
     e.preventDefault();
     uploadArea.classList.remove('drag');
-    const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith('image/')) handleImageFile(file);
+    if (e.dataTransfer.files.length) addFilesToGallery(e.dataTransfer.files);
   });
 
-  function handleImageFile(file) {
-    if (!file) return;
-    if (!file.type.startsWith('image/')) { toast('Selecione um arquivo de imagem válido.', 'error'); return; }
-    if (file.size > 5 * 1024 * 1024) { toast('Arquivo muito grande. Máx. 5MB.', 'error'); return; }
-    const reader = new FileReader();
-    reader.onload = ev => {
-      currentImg = ev.target.result;
-      showImgPreview(currentImg);
-      vImgUrl.value = '';
-    };
-    reader.onerror = () => toast('Não foi possível ler essa imagem.', 'error');
-    reader.readAsDataURL(file);
+  function addUrlFromInput() {
+    const url = vImgUrlInput.value.trim();
+    if (!url) return;
+    galleryImages.push({ id: null, file: null, url, previewUrl: url, principal: galleryImages.length === 0 });
+    vImgUrlInput.value = '';
+    renderGallery();
   }
-  function showImgPreview(src) {
-    document.getElementById('uploadPlaceholder').style.display = 'none';
-    document.getElementById('uploadPreviewWrap').style.display = 'block';
-    document.getElementById('uploadPreview').src = src;
-  }
-  function resetImgUpload() {
-    currentImg = '';
-    document.getElementById('uploadPlaceholder').style.display = 'block';
-    document.getElementById('uploadPreviewWrap').style.display = 'none';
-    document.getElementById('uploadPreview').src = '';
-    imgFileInput.value = '';
-  }
+  vImgUrlInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addUrlFromInput(); } });
+  vImgUrlInput.addEventListener('blur', addUrlFromInput);
 
-  /* ── TABELA DE CONSIGNAÇÕES ── */
-  async function renderConsigTable() {
-    let cs;
+  /* ── TABELA DE CONSIGNAÇÕES (paginada) ── */
+  let consigState = { page: 0, pageSize: 20, rows: [], total: 0 };
+  function resetConsigState() { consigState = { page: 0, pageSize: 20, rows: [], total: 0 }; }
+  document.getElementById('consigLoadMoreBtn').addEventListener('click', () => loadConsigPage(false));
+
+  async function loadConsigPage(reset) {
+    const pageToLoad = reset ? 0 : consigState.page + 1;
+    const btn = document.getElementById('consigLoadMoreBtn');
+    btn.disabled = true;
     try {
-      cs = await HM.getConsigs();
+      const { rows, total } = await HM.getConsigs({ page: pageToLoad, pageSize: consigState.pageSize });
+      consigState.page = pageToLoad;
+      consigState.rows = reset ? rows : consigState.rows.concat(rows);
+      consigState.total = total;
+      renderConsigTable();
     } catch (err) {
       console.error('[admin] Falha ao carregar consignações.', err);
       toast('Não foi possível carregar as consignações.', 'error');
-      return;
+    } finally {
+      btn.disabled = false;
     }
+  }
+
+  function renderConsigTable() {
+    const cs = consigState.rows;
     const tbody = document.getElementById('consigTableBody');
     if (!cs.length) {
       tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p>Nenhuma consignação registrada.</p></div></td></tr>`;
-      return;
+    } else {
+      const podeExcluir = roleAtLeast('gerente');
+      tbody.innerHTML = cs.map(c => `
+        <tr>
+          <td><div class="td-name">${escapeHtml(c.owner)}</div></td>
+          <td>${escapeHtml(c.vehicle)}<br><span style="color:var(--gray);font-size:11px">${escapeHtml(c.plate || '—')}</span></td>
+          <td><a href="https://wa.me/55${(c.contact || '').replace(/\D/g, '')}" target="_blank" style="color:var(--green);text-decoration:none">${escapeHtml(c.contact)}</a></td>
+          <td style="font-weight:700">${escapeHtml(c.value || '—')}</td>
+          <td style="font-size:12px;color:var(--gray)">${c.date ? new Date(c.date + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+          <td><span class="badge ${consigStatusCls[c.status] || 'badge-seminovo'}">${consigStatusLabels[c.status] || c.status}</span></td>
+          <td>
+            <div class="actions">
+              <button class="btn-icon edit" type="button" data-cedit="${c.id}" aria-label="Editar consignação de ${escapeHtml(c.owner)}">${ICON_EDIT}</button>
+              ${podeExcluir ? `<button class="btn-icon del" type="button" data-cdel="${c.id}" data-label="consignação de ${escapeHtml(c.owner)}" aria-label="Excluir consignação de ${escapeHtml(c.owner)}">${ICON_DEL}</button>` : ''}
+            </div>
+          </td>
+        </tr>
+      `).join('');
+      tbody.querySelectorAll('[data-cedit]').forEach(b => b.addEventListener('click', () => openConsigModal(b.dataset.cedit, b)));
+      tbody.querySelectorAll('[data-cdel]').forEach(b => b.addEventListener('click', () => confirmDelete('consig', b.dataset.cdel, b.dataset.label, b)));
     }
-    tbody.innerHTML = cs.map(c => `
-      <tr>
-        <td><div class="td-name">${escapeHtml(c.owner)}</div></td>
-        <td>${escapeHtml(c.vehicle)}<br><span style="color:var(--gray);font-size:11px">${escapeHtml(c.plate || '—')}</span></td>
-        <td><a href="https://wa.me/55${(c.contact || '').replace(/\D/g, '')}" target="_blank" style="color:var(--green);text-decoration:none">${escapeHtml(c.contact)}</a></td>
-        <td style="font-weight:700">${escapeHtml(c.value || '—')}</td>
-        <td style="font-size:12px;color:var(--gray)">${c.date ? new Date(c.date + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
-        <td><span class="badge ${consigStatusCls[c.status] || 'badge-seminovo'}">${consigStatusLabels[c.status] || c.status}</span></td>
-        <td>
-          <div class="actions">
-            <button class="btn-icon edit" type="button" data-cedit="${c.id}" aria-label="Editar consignação de ${escapeHtml(c.owner)}">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-            </button>
-            <button class="btn-icon del" type="button" data-cdel="${c.id}" data-label="consignação de ${escapeHtml(c.owner)}" aria-label="Excluir consignação de ${escapeHtml(c.owner)}">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
-            </button>
-          </div>
-        </td>
-      </tr>
-    `).join('');
-
-    tbody.querySelectorAll('[data-cedit]').forEach(b => b.addEventListener('click', () => openConsigModal(b.dataset.cedit, b, cs)));
-    tbody.querySelectorAll('[data-cdel]').forEach(b => b.addEventListener('click', () => confirmDelete('consig', b.dataset.cdel, b.dataset.label, b)));
+    document.getElementById('consigListCount').textContent = cs.length ? `Mostrando ${cs.length} de ${consigState.total}` : '';
+    document.getElementById('consigLoadMoreBtn').hidden = cs.length >= consigState.total;
   }
 
   /* ── MODAL DE CONSIGNAÇÃO ── */
@@ -406,18 +534,18 @@
   document.getElementById('consigSaveBtn').addEventListener('click', saveConsig);
   consigOverlay.addEventListener('click', e => { if (e.target === e.currentTarget) closeConsigModal(); });
 
-  async function openConsigModal(id, triggerEl, cachedList) {
+  function openConsigModal(id, triggerEl) {
     lastFocusedEl = triggerEl || document.activeElement;
     document.getElementById('consigFormError').textContent = '';
-    ['cId', 'cOwner', 'cContact', 'cVehicle', 'cPlate', 'cValue', 'cNotes', 'cCommission'].forEach(f => { document.getElementById(f).value = ''; });
+    ['cId', 'cUpdatedAt', 'cOwner', 'cContact', 'cVehicle', 'cPlate', 'cValue', 'cNotes', 'cCommission'].forEach(f => { document.getElementById(f).value = ''; });
     document.getElementById('cDate').value = new Date().toISOString().split('T')[0];
     document.getElementById('cStatus').value = 'ativo';
     document.getElementById('consigModalTitle').textContent = id ? 'Editar Consignação' : 'Registrar Consignação';
     if (id) {
-      const list = cachedList || await HM.getConsigs();
-      const c = list.find(x => x.id === id);
+      const c = consigState.rows.find(x => x.id === id);
       if (!c) return;
       document.getElementById('cId').value = c.id;
+      document.getElementById('cUpdatedAt').value = c.updatedAt || '';
       document.getElementById('cOwner').value = c.owner;
       document.getElementById('cContact').value = c.contact;
       document.getElementById('cVehicle').value = c.vehicle;
@@ -437,10 +565,7 @@
     const contact = document.getElementById('cContact').value.trim();
     const vehicle = document.getElementById('cVehicle').value.trim();
     const errEl = document.getElementById('consigFormError');
-    if (!owner || !contact || !vehicle) {
-      errEl.textContent = 'Preencha todos os campos obrigatórios (*).';
-      return;
-    }
+    if (!owner || !contact || !vehicle) { errEl.textContent = 'Preencha todos os campos obrigatórios (*).'; return; }
     errEl.textContent = '';
     const editId = document.getElementById('cId').value;
     const data = {
@@ -457,19 +582,18 @@
     saveBtn.disabled = true;
     try {
       if (editId) {
+        data.expectedUpdatedAt = document.getElementById('cUpdatedAt').value || null;
         await HM.updateConsig(editId, data);
-        await HM.logActivity(`Consignação de ${owner} atualizada`, 'azul');
         toast('Consignação atualizada!', 'success');
       } else {
         await HM.createConsig(data);
-        await HM.logActivity(`Nova consignação: ${vehicle} de ${owner}`, 'verde');
         toast('Consignação registrada!', 'success');
       }
-      await Promise.all([renderConsigTable(), renderDashboard()]);
+      await Promise.all([loadConsigPage(true), renderDashboard()]);
       closeConsigModal();
     } catch (err) {
       console.error('[admin] Falha ao salvar consignação.', err);
-      errEl.textContent = 'Não foi possível salvar a consignação. Tente novamente.';
+      errEl.textContent = (err instanceof HM.ConcurrencyError) ? err.message : 'Não foi possível salvar a consignação. Tente novamente.';
     } finally {
       saveBtn.disabled = false;
     }
@@ -498,13 +622,11 @@
     try {
       if (type === 'vehicle') {
         await HM.deleteVehicle(id);
-        await renderVehicleTable();
-        await HM.logActivity('Veículo excluído do estoque', 'vermelho');
+        await loadVehiclePage(true);
         toast('Veículo excluído.', 'success');
       } else if (type === 'consig') {
         await HM.deleteConsig(id);
-        await renderConsigTable();
-        await HM.logActivity('Consignação excluída', 'vermelho');
+        await loadConsigPage(true);
         toast('Consignação excluída.', 'success');
       }
       await renderDashboard();
@@ -548,7 +670,6 @@
     };
     try {
       await HM.saveConfig(cfg);
-      await HM.logActivity('Configurações salvas', 'azul');
       toast('Configurações salvas com sucesso! Recarregue o site público para ver as mudanças.', 'success');
     } catch (err) {
       console.error('[admin] Falha ao salvar configurações.', err);
@@ -574,6 +695,132 @@
       errEl.textContent = 'Não foi possível alterar a senha. Tente novamente.';
     }
   });
+
+  /* ── BACKUP E RESTAURAÇÃO ── */
+  document.getElementById('backupExportBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('backupExportBtn');
+    btn.disabled = true;
+    try {
+      const backup = await HM.exportBackup();
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `holanda-motors-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast('Backup gerado — confira sua pasta de downloads.', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao gerar backup.', err);
+      toast('Não foi possível gerar o backup.', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('backupRestoreBtn').addEventListener('click', async () => {
+    const fileInput = document.getElementById('backupFileInput');
+    const logEl = document.getElementById('backupLog');
+    const file = fileInput.files[0];
+    if (!file) { toast('Selecione um arquivo de backup primeiro.', 'error'); return; }
+    const btn = document.getElementById('backupRestoreBtn');
+    btn.disabled = true;
+    logEl.innerHTML = '';
+    try {
+      const backup = JSON.parse(await file.text());
+      await HM.restoreBackup(backup, (msg) => {
+        const li = document.createElement('li');
+        li.textContent = msg;
+        li.className = msg.startsWith('✓') ? 'log-ok' : 'log-err';
+        logEl.appendChild(li);
+      });
+      toast('Restauração concluída — confira o resultado de cada item abaixo.', 'success');
+      await Promise.all([loadVehiclePage(true), loadConsigPage(true), renderDashboard(), loadConfigForm()]);
+    } catch (err) {
+      console.error('[admin] Falha ao restaurar backup.', err);
+      toast('Arquivo de backup inválido ou corrompido.', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  /* ── USUÁRIOS (níveis de acesso) ── */
+  async function renderUsersTable() {
+    const tbody = document.getElementById('usersTableBody');
+    tbody.innerHTML = `<tr><td colspan="4">Carregando…</td></tr>`;
+    try {
+      const users = await HM.getUsers();
+      tbody.innerHTML = users.map(u => `
+        <tr>
+          <td>${escapeHtml(u.nome || '—')}</td>
+          <td>${escapeHtml(u.email || '—')}</td>
+          <td>
+            <select class="filter-select" data-role-select="${u.id}" ${u.id === currentUserId ? 'disabled' : ''}>
+              <option value="vendedor" ${u.role === 'vendedor' ? 'selected' : ''}>Vendedor</option>
+              <option value="gerente" ${u.role === 'gerente' ? 'selected' : ''}>Gerente</option>
+              <option value="administrador" ${u.role === 'administrador' ? 'selected' : ''}>Administrador</option>
+            </select>
+          </td>
+          <td>${u.id === currentUserId ? '<span style="color:var(--gray);font-size:12px">Você</span>' : `<button class="btn-secondary" type="button" data-save-role="${u.id}">Salvar</button>`}</td>
+        </tr>
+      `).join('');
+      tbody.querySelectorAll('[data-save-role]').forEach(btn => btn.addEventListener('click', async () => {
+        const id = btn.dataset.saveRole;
+        const select = tbody.querySelector(`[data-role-select="${id}"]`);
+        btn.disabled = true;
+        try {
+          await HM.updateUserRole(id, select.value);
+          toast('Nível de acesso atualizado.', 'success');
+        } catch (err) {
+          console.error('[admin] Falha ao atualizar nível de acesso.', err);
+          toast('Não foi possível atualizar o nível de acesso.', 'error');
+        } finally {
+          btn.disabled = false;
+        }
+      }));
+    } catch (err) {
+      console.error('[admin] Falha ao carregar usuários.', err);
+      tbody.innerHTML = `<tr><td colspan="4">Não foi possível carregar os usuários.</td></tr>`;
+    }
+  }
+
+  /* ── LOGS (trilha de auditoria completa) ── */
+  let logsState = { page: 0, pageSize: 25, entidade: '', rows: [], total: 0 };
+  document.getElementById('filterLogEntidade').addEventListener('change', e => { logsState.entidade = e.target.value; loadLogsPage(true); });
+  document.getElementById('logsLoadMoreBtn').addEventListener('click', () => loadLogsPage(false));
+
+  async function loadLogsPage(reset) {
+    const pageToLoad = reset ? 0 : logsState.page + 1;
+    const btn = document.getElementById('logsLoadMoreBtn');
+    btn.disabled = true;
+    try {
+      const { rows, total } = await HM.getLogs({ page: pageToLoad, pageSize: logsState.pageSize, entidade: logsState.entidade });
+      logsState.page = pageToLoad;
+      logsState.rows = reset ? rows : logsState.rows.concat(rows);
+      logsState.total = total;
+      renderLogsTable();
+    } catch (err) {
+      console.error('[admin] Falha ao carregar logs.', err);
+      toast('Não foi possível carregar os logs.', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function renderLogsTable() {
+    const tbody = document.getElementById('logsTableBody');
+    const rows = logsState.rows;
+    tbody.innerHTML = rows.length ? rows.map(l => `
+      <tr>
+        <td style="white-space:nowrap;font-size:12px;color:var(--gray)">${new Date(l.created_at).toLocaleString('pt-BR')}</td>
+        <td>${escapeHtml(l.usuario_email || '—')}</td>
+        <td style="text-transform:capitalize">${escapeHtml(l.acao)} <span style="color:var(--gray)">· ${escapeHtml(l.entidade)}</span></td>
+        <td>${escapeHtml((l.detalhes && l.detalhes.resumo) || '—')}</td>
+      </tr>
+    `).join('') : `<tr><td colspan="4"><div class="empty-state"><p>Nenhum log encontrado.</p></div></td></tr>`;
+    document.getElementById('logsListCount').textContent = rows.length ? `Mostrando ${rows.length} de ${logsState.total}` : '';
+    document.getElementById('logsLoadMoreBtn').hidden = rows.length >= logsState.total;
+  }
 
   /* ── FORMATAÇÃO DE PREÇO (aplica em qualquer campo de preço do painel) ── */
   ['vPrice', 'cValue'].forEach(id => {

@@ -8,7 +8,7 @@
  * desta chave. Troque os dois valores abaixo pelos do SEU projeto (veja
  * README.md → "Configurando o Supabase do zero").
  */
-const SUPABASE_URL = 'https://SEU-PROJETO.supabase.co';
-const SUPABASE_ANON_KEY = 'SUA-CHAVE-ANON-PUBLICA-AQUI';
+const SUPABASE_URL = 'https://bqtfnnglwampyijmwdgm.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_vaitarKonQCntB4mmzltLg_UMYpWaV3';
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
