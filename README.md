@@ -87,6 +87,7 @@ Tabelas criadas por `supabase/schema.sql`:
 | `configuracoes_loja` | Linha única com os dados da loja (endereço, WhatsApp, horários, textos, preferências de exibição do site). |
 | `logs_acoes` | Trilha de auditoria — toda ação de escrita do painel gera uma linha aqui (quem, o quê, quando). É a fonte tanto do feed "Atividade recente" do dashboard quanto do histórico por veículo e da tela de Logs. Somente leitura depois de gravada (sem política de update/delete). |
 | `usuarios` | Perfil de cada administrador (nome, e-mail, **nível de acesso**), vinculada 1:1 ao usuário do Supabase Auth. A senha em si nunca fica nesta tabela. Preenchida automaticamente por um gatilho quando um usuário é criado no Auth — veja [Níveis de acesso](#níveis-de-acesso). |
+| `interacoes_veiculo` | Um evento por "visualização" (abriu o modal de detalhes) ou clique em WhatsApp — alimenta a coluna "Interesse" na tabela de veículos e o "Mais vistos" do dashboard. **Único caso de tabela com INSERT público** no projeto (o site é anônimo); a leitura continua restrita a quem está autenticado, então nenhum visitante vê os números de ninguém. Sem limitação de taxa — ver [Limitações conhecidas](#limitações-conhecidas). |
 
 A tabela `atividades` da primeira versão da migração ainda existe no banco (por compatibilidade, nada foi apagado), mas não é mais usada — foi substituída por `logs_acoes`, que registra a mesma informação de forma estruturada e com autoria.
 
@@ -167,8 +168,8 @@ Cada card e o modal também mostram uma simulação de parcelamento ("a partir d
 ### `admin.html` (painel do gestor) + `assets/js/admin.js`
 
 1. **Login** — `HM.login(email, senha)` autentica no Supabase Auth. A sessão persiste entre recarregamentos e é encerrada automaticamente se expirar ou for revogada em outra aba.
-2. **Dashboard** — métricas de total cadastrado, vendidos, destaques e consignações (contagens feitas no servidor, sem baixar o estoque inteiro) + atividade recente.
-3. **Veículos (CRUD)** — criar, editar, ocultar/exibir, marcar como vendido e excluir. Lista paginada com busca instantânea por marca/modelo/placa. Upload de várias fotos por veículo (arrastar e soltar, ou selecionar múltiplos arquivos), cada uma compactada automaticamente antes do envio ao Storage; qualquer uma pode virar a "capa" do anúncio. Cada veículo tem um histórico de alterações (quem editou o quê e quando).
+2. **Dashboard** — métricas de total cadastrado, vendidos, destaques e consignações (contagens feitas no servidor, sem baixar o estoque inteiro) + atividade recente + "Mais vistos" (top 5 veículos por visualização no site público).
+3. **Veículos (CRUD)** — criar, editar, ocultar/exibir, marcar como vendido e excluir. Lista paginada com busca instantânea por marca/modelo/placa, com uma coluna "Interesse" mostrando visualizações e cliques em WhatsApp de cada veículo. Upload de várias fotos por veículo (arrastar e soltar, ou selecionar múltiplos arquivos), cada uma compactada automaticamente antes do envio ao Storage; qualquer uma pode virar a "capa" do anúncio. Cada veículo tem um histórico de alterações (quem editou o quê e quando).
 4. **Consignações** — registro de veículos consignados por terceiros, também paginado.
 5. **Usuários** — visível para administradores: lista quem tem acesso ao painel e permite alterar o nível de cada um.
 6. **Logs** — visível para gerentes/administradores: trilha completa de ações no painel, com filtro por área.
@@ -265,8 +266,8 @@ O Supabase já mantém backups automáticos diários (visíveis em **Database �
 - **Dependência de internet:** diferente da versão anterior (100% local), o site e o painel agora precisam que o Supabase esteja acessível. Sem internet, nem o site público carrega o estoque.
 - **Chave pública no front-end:** a chave `anon` do Supabase fica visível no código-fonte — isso é esperado e seguro *desde que* as políticas de RLS em `supabase/schema.sql` continuem ativas. Nunca desative o RLS de uma tabela sem entender o impacto.
 - **Sem confirmação de e-mail por padrão:** o passo a passo usa "Auto Confirm User" para simplificar a criação de administradores. Se quiser exigir confirmação por e-mail, configure isso em **Authentication → Providers → Email** no Supabase.
-- **"Ocultar veículos sem foto" + paginação:** essa preferência (Configurações → Preferências do site) filtra a página já carregada no navegador, não a consulta no servidor. Em catálogos muito grandes, o botão "Carregar mais" pode ocasionalmente aparecer mesmo com poucos itens visíveis (ou vice-versa) quando essa opção está ligada — não afeta o que é mostrado, só a estimativa de quanto falta carregar.
 - **Backup pelo painel não inclui arquivos de foto:** ver [Backup e restauração](#backup-e-restauração) — o JSON exportado guarda URLs, não os arquivos. Para um backup completo, use os mecanismos nativos do Supabase (Database Backups + Storage).
+- **Contador de interesse sem limitação de taxa:** o registro de visualizações/cliques em WhatsApp (`interacoes_veiculo`) aceita inserção de qualquer visitante anônimo, sem checar se é a mesma pessoa clicando repetidamente. É um número de referência para comparar "qual anúncio funciona melhor", não uma métrica auditável — alguém tecnicamente poderia infla-lo com requisições repetidas. Nenhum dado sensível fica exposto por causa disso (a leitura continua exigindo login).
 
 ## Licença
 

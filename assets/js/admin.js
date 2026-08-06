@@ -23,6 +23,8 @@
   const ICON_EDIT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
   const ICON_DEL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6m4-6v6"/><path d="M9 6V4h6v2"/></svg>';
   const ICON_TAG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20.59 13.41L11 3.83A2 2 0 009.59 3.24L4 3a1 1 0 00-1 1l.24 5.59a2 2 0 00.59 1.41l9.58 9.58a2 2 0 002.83 0l4.35-4.35a2 2 0 000-2.82z"/><circle cx="8" cy="8" r="1.5"/></svg>';
+  const ICON_EYE_SMALL = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="vertical-align:-2px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const ICON_WPP_SMALL = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>';
 
   let lastFocusedEl = null;
   let pendingDelete = { type: null, id: null };
@@ -157,9 +159,9 @@
 
   /* ── DASHBOARD ── */
   async function renderDashboard() {
-    let stats, consigStats, acts;
+    let stats, consigStats, acts, maisVistos;
     try {
-      [stats, consigStats, acts] = await Promise.all([HM.getVehicleStats(), HM.getConsigStats(), HM.getActivity()]);
+      [stats, consigStats, acts, maisVistos] = await Promise.all([HM.getVehicleStats(), HM.getConsigStats(), HM.getActivity(), HM.getMaisVistos()]);
     } catch (err) {
       console.error('[admin] Falha ao carregar o dashboard.', err);
       toast('Não foi possível carregar o dashboard.', 'error');
@@ -185,11 +187,15 @@
     document.getElementById('activityList').innerHTML = acts.length
       ? acts.map(a => `<li class="activity-item"><span class="activity-dot" style="background:${colors[a.color] || 'var(--gray)'}"></span><span>${escapeHtml(a.msg)}</span><span class="activity-time">${a.time}</span></li>`).join('')
       : '<li class="activity-item"><span class="activity-dot" style="background:var(--gray)"></span><span style="color:var(--gray)">Nenhuma atividade ainda.</span></li>';
+
+    document.getElementById('mostViewedList').innerHTML = maisVistos.length
+      ? maisVistos.map(m => `<li class="most-viewed-item"><span class="most-viewed-name">${escapeHtml(m.nome)}</span><span class="most-viewed-count">${m.visualizacoes} visualizaç${m.visualizacoes === 1 ? 'ão' : 'ões'}</span></li>`).join('')
+      : '<li class="most-viewed-item"><span style="color:var(--gray)">Ainda sem visualizações registradas.</span></li>';
   }
 
   /* ── TABELA DE VEÍCULOS (paginada + busca instantânea) ── */
-  let vehicleState = { page: 0, pageSize: 20, search: '', tipo: '', badge: '', rows: [], total: 0 };
-  function resetVehicleState() { vehicleState = { page: 0, pageSize: 20, search: '', tipo: '', badge: '', rows: [], total: 0 }; }
+  let vehicleState = { page: 0, pageSize: 20, search: '', tipo: '', badge: '', rows: [], total: 0, interesse: {} };
+  function resetVehicleState() { vehicleState = { page: 0, pageSize: 20, search: '', tipo: '', badge: '', rows: [], total: 0, interesse: {} }; }
 
   let searchDebounceTimer = null;
   document.getElementById('searchVehicle').addEventListener('input', e => {
@@ -201,17 +207,36 @@
   document.getElementById('filterBadge').addEventListener('change', e => { vehicleState.badge = e.target.value; loadVehiclePage(true); });
   document.getElementById('vehicleLoadMoreBtn').addEventListener('click', () => loadVehiclePage(false));
 
+  // Token de requisição: se o usuário mexer em outro filtro antes desta
+  // consulta voltar, a resposta antiga (agora obsoleta) é descartada em vez
+  // de sobrescrever o resultado mais recente na tela (mesmo achado do
+  // catálogo público, corrigido aqui pelo mesmo motivo).
+  let vehicleRequestToken = 0;
+
   async function loadVehiclePage(reset) {
+    const requestToken = ++vehicleRequestToken;
     const pageToLoad = reset ? 0 : vehicleState.page + 1;
     const loadMoreBtn = document.getElementById('vehicleLoadMoreBtn');
     loadMoreBtn.disabled = true;
     try {
       const { rows, total } = await HM.getVehicles({ page: pageToLoad, pageSize: vehicleState.pageSize, search: vehicleState.search, tipo: vehicleState.tipo, badge: vehicleState.badge });
+      if (requestToken !== vehicleRequestToken) return;
       vehicleState.page = pageToLoad;
       vehicleState.rows = reset ? rows : vehicleState.rows.concat(rows);
       vehicleState.total = total;
       renderVehicleTable();
+      try {
+        // Mescla em vez de sobrescrever: "carregar mais" só busca o
+        // interesse da página nova, sem perder o das páginas já mostradas.
+        const novoInteresse = await HM.getInteresseVeiculos(rows.map(v => v.id));
+        if (requestToken !== vehicleRequestToken) return;
+        vehicleState.interesse = reset ? novoInteresse : { ...vehicleState.interesse, ...novoInteresse };
+        renderVehicleTable();
+      } catch (err) {
+        console.error('[admin] Falha ao carregar contadores de interesse.', err);
+      }
     } catch (err) {
+      if (requestToken !== vehicleRequestToken) return;
       console.error('[admin] Falha ao carregar veículos.', err);
       toast('Não foi possível carregar os veículos.', 'error');
     } finally {
@@ -219,13 +244,14 @@
     }
   }
 
-  function vehicleRowHtml(v) {
+  function vehicleRowHtml(v, interesse) {
     const subParts = [v.cor || '—', v.combustivel || '—'];
     if (v.placa) subParts.push(`Placa ${v.placa}`);
     const visivelBadge = v.vendido
       ? `<span class="badge badge-vendido">Vendido</span>`
       : `<span class="badge ${v.ativo ? 'badge-ativo' : 'badge-inativo'}">${v.ativo ? 'Visível' : 'Oculto'}</span>`;
     const podeExcluir = roleAtLeast('gerente');
+    const info = interesse || { visualizacoes: 0, whatsapp: 0 };
     return `
       <tr>
         <td>${v.img ? `<img class="td-img" src="${escapeHtml(v.img)}" alt="">` : `<div class="td-img" aria-hidden="true"></div>`}</td>
@@ -235,6 +261,7 @@
         <td style="text-transform:capitalize">${v.tipo}</td>
         <td><span class="badge ${badgeCls[v.badge]}">${badgeLabels[v.badge] || v.badge}</span></td>
         <td>${visivelBadge}</td>
+        <td class="td-interesse" title="${info.visualizacoes} visualizações · ${info.whatsapp} cliques em WhatsApp">${ICON_EYE_SMALL} ${info.visualizacoes} &nbsp; ${ICON_WPP_SMALL} ${info.whatsapp}</td>
         <td>
           <div class="actions">
             <button class="btn-icon toggle" type="button" data-toggle="${v.id}" ${v.vendido ? 'disabled' : ''} aria-label="${v.ativo ? 'Ocultar do site' : 'Exibir no site'}">${v.ativo ? ICON_EYE_OFF : ICON_EYE}</button>
@@ -250,9 +277,9 @@
     const vs = vehicleState.rows;
     const tbody = document.getElementById('vehicleTableBody');
     if (!vs.length) {
-      tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><p>Nenhum veículo encontrado.</p></div></td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><p>Nenhum veículo encontrado.</p></div></td></tr>`;
     } else {
-      tbody.innerHTML = vs.map(vehicleRowHtml).join('');
+      tbody.innerHTML = vs.map(v => vehicleRowHtml(v, vehicleState.interesse[v.id])).join('');
       tbody.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', () => toggleVisible(b.dataset.toggle)));
       tbody.querySelectorAll('[data-sold]').forEach(b => b.addEventListener('click', () => markSold(b.dataset.sold, b.dataset.label, b.dataset.vendido === '1')));
       tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openVehicleModal(b.dataset.edit, b)));

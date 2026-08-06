@@ -547,3 +547,39 @@ begin
     alter table configuracoes_loja add constraint config_parcelas_valido check (parcelamento_max_parcelas > 0 and parcelamento_max_parcelas <= 120);
   end if;
 end $$;
+
+-- ============================================================================
+-- PARTE 5 — Contador de interesse por veículo
+-- ----------------------------------------------------------------------------
+-- Registra cada "visualização" (abriu o modal de detalhes) e clique em
+-- WhatsApp por veículo — dá pra ver no painel quais anúncios realmente
+-- geram interesse. Tabela de INSERT público (o site é anônimo), mas
+-- leitura só para quem está autenticado — visitante nunca vê os números
+-- de ninguém, só consegue registrar o próprio clique.
+--
+-- Trade-off consciente: como o insert é público e sem limite de taxa,
+-- alguém tecnicamente poderia inflar a contagem de um veículo com
+-- requisições repetidas. Não há dado sensível em risco (só um contador),
+-- então não implementamos limitação de taxa por ora — ver README.
+-- Ao contrário de "atividades"/"logs_acoes", esta tabela não é podada
+-- automaticamente: é um histórico de eventos, útil de manter completo
+-- para análise de tendência ao longo do tempo.
+-- ============================================================================
+
+create table if not exists interacoes_veiculo (
+  id uuid primary key default gen_random_uuid(),
+  veiculo_id uuid not null references veiculos (id) on delete cascade,
+  tipo text not null check (tipo in ('visualizacao', 'whatsapp')),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_interacoes_veiculo on interacoes_veiculo (veiculo_id, tipo);
+create index if not exists idx_interacoes_veiculo_created on interacoes_veiculo (created_at desc);
+
+alter table interacoes_veiculo enable row level security;
+
+drop policy if exists "interacoes_insert_public" on interacoes_veiculo;
+create policy "interacoes_insert_public" on interacoes_veiculo for insert with check (true);
+
+drop policy if exists "interacoes_select_auth" on interacoes_veiculo;
+create policy "interacoes_select_auth" on interacoes_veiculo for select using (auth.role() = 'authenticated');

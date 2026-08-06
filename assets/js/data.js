@@ -599,6 +599,60 @@ const HM = (function () {
     await logAction('papel', 'usuario', userId, { resumo: `alterou o nível de acesso de um usuário para ${role}` });
   }
 
+  // ── INTERESSE POR VEÍCULO (visualizações e cliques em WhatsApp) ──
+
+  /**
+   * Registra uma interação de um visitante do site público (anônimo) —
+   * "visualizacao" quando abre o modal de detalhes, "whatsapp" quando
+   * clica em qualquer botão de WhatsApp daquele veículo. Nunca lança erro
+   * pro chamador: uma falha aqui não pode atrapalhar a navegação de
+   * quem só está olhando o site.
+   */
+  async function logInteresse(veiculoId, tipo) {
+    try {
+      const { error } = await supabaseClient.from('interacoes_veiculo').insert({ veiculo_id: veiculoId, tipo });
+      if (error) console.error('[HM] Falha ao registrar interesse.', error);
+    } catch (err) {
+      console.error('[HM] Falha ao registrar interesse.', err);
+    }
+  }
+
+  /** Contagem de visualizações/WhatsApp por veículo, para os ids informados — usado pela tabela de veículos do painel. Requer autenticação (RLS). */
+  async function getInteresseVeiculos(ids) {
+    const resumo = {};
+    ids.forEach(id => { resumo[id] = { visualizacoes: 0, whatsapp: 0 }; });
+    if (!ids.length) return resumo;
+    const rows = unwrap(await supabaseClient.from('interacoes_veiculo').select('veiculo_id, tipo').in('veiculo_id', ids));
+    rows.forEach(r => {
+      if (!resumo[r.veiculo_id]) resumo[r.veiculo_id] = { visualizacoes: 0, whatsapp: 0 };
+      if (r.tipo === 'visualizacao') resumo[r.veiculo_id].visualizacoes++;
+      else if (r.tipo === 'whatsapp') resumo[r.veiculo_id].whatsapp++;
+    });
+    return resumo;
+  }
+
+  /** Os N veículos com mais visualizações — para o "Mais vistos" do dashboard. */
+  async function getMaisVistos(limite = 5) {
+    const rows = unwrap(await supabaseClient.from('interacoes_veiculo').select('veiculo_id').eq('tipo', 'visualizacao'));
+    const contagem = new Map();
+    rows.forEach(r => contagem.set(r.veiculo_id, (contagem.get(r.veiculo_id) || 0) + 1));
+    const idsOrdenados = Array.from(contagem.entries()).sort((a, b) => b[1] - a[1]).slice(0, limite);
+    if (!idsOrdenados.length) return [];
+    const ids = idsOrdenados.map(([id]) => id);
+    const veiculos = unwrap(await supabaseClient
+      .from('veiculos')
+      .select('id, modelo, marcas(nome)')
+      .in('id', ids));
+    const porId = new Map(veiculos.map(v => [v.id, v]));
+    return idsOrdenados
+      .filter(([id]) => porId.has(id))
+      .map(([id, visualizacoes]) => ({
+        id,
+        nome: `${(porId.get(id).marcas || {}).nome || ''} ${porId.get(id).modelo}`.trim(),
+        visualizacoes,
+      }));
+  }
+
   // ── MIGRAÇÃO IDEMPOTENTE A PARTIR DO LOCALSTORAGE (sistema antigo) ──
   // Usada por migrar-localstorage.html. Cada registro migrado grava seu id
   // original do localStorage em "legacy_id" (coluna com índice único
@@ -794,6 +848,10 @@ const HM = (function () {
     getCurrentUserProfile,
     getUsers,
     updateUserRole,
+    // interesse por veículo
+    logInteresse,
+    getInteresseVeiculos,
+    getMaisVistos,
     // migração idempotente a partir do localStorage
     importLegacyVehicle,
     importLegacyConsig,

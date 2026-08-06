@@ -96,6 +96,7 @@ tbody td { padding: 14px 16px; font-size: 13px; vertical-align: middle; }
 .td-img { width: 56px; height: 40px; object-fit: contain; border-radius: 3px; background: var(--dark3); }
 .td-name { font-weight: 600; }
 .td-sub { font-size: 11px; color: var(--gray); margin-top: 2px; }
+.td-interesse { white-space: nowrap; color: var(--gray); font-size: 12px; }
 .actions { display: flex; gap: 8px; align-items: center; }
 .btn-icon { width: 32px; height: 32px; border-radius: 4px; border: 1px solid var(--border2); background: transparent; color: var(--gray); cursor: pointer; transition: .15s; display: flex; align-items: center; justify-content: center; }
 .btn-icon:hover, .btn-icon:focus-visible { color: var(--white); border-color: var(--border2); }
@@ -167,6 +168,12 @@ tbody td { padding: 14px 16px; font-size: 13px; vertical-align: middle; }
 .type-bar-track { flex: 1; height: 6px; background: rgba(255,255,255,.07); border-radius: 3px; overflow: hidden; }
 .type-bar-fill { height: 100%; border-radius: 3px; background: var(--red); transition: width .5s; }
 .type-bar-count { width: 28px; text-align: right; font-weight: 600; }
+
+.most-viewed-list { list-style: none; counter-reset: mv; display: flex; flex-direction: column; gap: 10px; }
+.most-viewed-item { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.most-viewed-item::before { counter-increment: mv; content: counter(mv); width: 20px; height: 20px; border-radius: 50%; background: rgba(255,255,255,.08); color: var(--gray); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.most-viewed-name { flex: 1; }
+.most-viewed-count { color: var(--gray); font-size: 12px; white-space: nowrap; }
 
 /* ── CONFIGURAÇÕES ── */
 .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
