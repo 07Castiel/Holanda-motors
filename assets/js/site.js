@@ -96,7 +96,12 @@
   /* ── CATÁLOGO (paginado) ── */
   async function loadCatalogPage(reset) {
     const pageToLoad = reset ? 0 : catalogState.page + 1;
-    const opts = { page: pageToLoad, pageSize: catalogState.pageSize };
+    // ativo/vendido são pedidos explicitamente (não só confiados ao RLS):
+    // se um gestor estiver logado neste mesmo navegador, a política de RLS
+    // para autenticados deixaria ver TODO o estoque — esses filtros
+    // garantem que o site público sempre mostra só o que pode ser vendido,
+    // não importa quem esteja com sessão aberta.
+    const opts = { page: pageToLoad, pageSize: catalogState.pageSize, ativo: true, vendido: false, comFoto: !!cfg.nophoto };
     if (catalogState.filter === 'carro' || catalogState.filter === 'moto') opts.tipo = catalogState.filter;
     if (catalogState.filter === 'consignado') opts.badge = 'consignado';
 
@@ -104,13 +109,8 @@
     loadMoreBtn.disabled = true;
     try {
       const { rows, total } = await HM.getVehicles(opts);
-      // "Ocultar veículos sem foto" é aplicado aqui, sobre a página já
-      // carregada — em catálogos muito grandes com essa opção ligada, a
-      // contagem de "carregar mais" pode ficar levemente conservadora
-      // (o total do servidor não desconta os sem foto); ver README.
-      const filtrados = cfg.nophoto ? rows.filter(v => v.img) : rows;
       catalogState.page = pageToLoad;
-      catalogState.rows = reset ? filtrados : catalogState.rows.concat(filtrados);
+      catalogState.rows = reset ? rows : catalogState.rows.concat(rows);
       catalogState.total = total;
       renderVehicles();
     } catch (err) {

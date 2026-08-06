@@ -151,38 +151,68 @@ alter table consignacoes enable row level security;
 alter table configuracoes_loja enable row level security;
 alter table atividades enable row level security;
 
+-- Nota sobre idempotência: toda política abaixo tem um "drop policy if
+-- exists" imediatamente antes (mesmo na primeira vez que aparece no
+-- arquivo) — sem isso, colar o script de novo num projeto existente falha
+-- na primeiríssima política com "policy already exists" e aborta antes de
+-- chegar nas partes 2/3, mesmo que aquelas já fossem "if exists" corretas.
+
 -- categorias: leitura pública, escrita só autenticado
+drop policy if exists "categorias_select_public" on categorias;
 create policy "categorias_select_public" on categorias for select using (true);
+drop policy if exists "categorias_write_auth" on categorias;
 create policy "categorias_write_auth" on categorias for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
 -- marcas: leitura pública, escrita só autenticado
+drop policy if exists "marcas_select_public" on marcas;
 create policy "marcas_select_public" on marcas for select using (true);
+drop policy if exists "marcas_write_auth" on marcas;
 create policy "marcas_write_auth" on marcas for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
 -- veiculos: leitura pública só dos ativos; autenticado vê e edita tudo
+-- (a política de select público é substituída na Parte 2 para também
+-- excluir vendidos — criada aqui em sua forma original só para o projeto
+-- nunca ficar num estado intermediário sem RLS caso o script pare no meio)
+drop policy if exists "veiculos_select_public_ativos" on veiculos;
 create policy "veiculos_select_public_ativos" on veiculos for select using (ativo = true);
+drop policy if exists "veiculos_select_auth_todos" on veiculos;
 create policy "veiculos_select_auth_todos" on veiculos for select using (auth.role() = 'authenticated');
+drop policy if exists "veiculos_write_auth" on veiculos;
 create policy "veiculos_write_auth" on veiculos for insert with check (auth.role() = 'authenticated');
+drop policy if exists "veiculos_update_auth" on veiculos;
 create policy "veiculos_update_auth" on veiculos for update using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+drop policy if exists "veiculos_delete_auth" on veiculos;
 create policy "veiculos_delete_auth" on veiculos for delete using (auth.role() = 'authenticated');
 
 -- midias_veiculo: leitura pública (fotos não são sensíveis), escrita só autenticado
+drop policy if exists "midias_select_public" on midias_veiculo;
 create policy "midias_select_public" on midias_veiculo for select using (true);
+drop policy if exists "midias_write_auth" on midias_veiculo;
 create policy "midias_write_auth" on midias_veiculo for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
--- consignacoes: uso interno, nunca público
+-- consignacoes: uso interno, nunca público (substituída por 4 políticas
+-- específicas na Parte 2 — criada aqui pelo mesmo motivo acima)
+drop policy if exists "consignacoes_auth_only" on consignacoes;
 create policy "consignacoes_auth_only" on consignacoes for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
 -- configuracoes_loja: leitura pública (o site usa), escrita só autenticado
+drop policy if exists "config_select_public" on configuracoes_loja;
 create policy "config_select_public" on configuracoes_loja for select using (true);
+drop policy if exists "config_write_auth" on configuracoes_loja;
 create policy "config_write_auth" on configuracoes_loja for update using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
--- atividades: uso interno do painel, nunca público
+-- atividades: descontinuada (ver Parte 2 → logs_acoes), mantida só por
+-- compatibilidade com projetos que já rodaram a Parte 1 antes dela existir
+drop policy if exists "atividades_auth_only" on atividades;
 create policy "atividades_auth_only" on atividades for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
--- usuarios: cada admin vê seu próprio perfil; autenticado vê todos (painel é de uso interno)
+-- usuarios: cada admin vê seu próprio perfil; autenticado vê todos nesta
+-- versão inicial (restrito por nível de acesso na Parte 2)
+drop policy if exists "usuarios_select_auth" on usuarios;
 create policy "usuarios_select_auth" on usuarios for select using (auth.role() = 'authenticated');
+drop policy if exists "usuarios_upsert_self" on usuarios;
 create policy "usuarios_upsert_self" on usuarios for insert with check (auth.uid() = id);
+drop policy if exists "usuarios_update_self" on usuarios;
 create policy "usuarios_update_self" on usuarios for update using (auth.uid() = id) with check (auth.uid() = id);
 
 -- ============================================================================
@@ -193,16 +223,20 @@ insert into storage.buckets (id, name, public)
 values ('veiculos-fotos', 'veiculos-fotos', true)
 on conflict (id) do nothing;
 
+drop policy if exists "veiculos_fotos_select_public" on storage.objects;
 create policy "veiculos_fotos_select_public" on storage.objects for select
   using (bucket_id = 'veiculos-fotos');
 
+drop policy if exists "veiculos_fotos_write_auth" on storage.objects;
 create policy "veiculos_fotos_write_auth" on storage.objects for insert
   with check (bucket_id = 'veiculos-fotos' and auth.role() = 'authenticated');
 
+drop policy if exists "veiculos_fotos_update_auth" on storage.objects;
 create policy "veiculos_fotos_update_auth" on storage.objects for update
   using (bucket_id = 'veiculos-fotos' and auth.role() = 'authenticated')
   with check (bucket_id = 'veiculos-fotos' and auth.role() = 'authenticated');
 
+drop policy if exists "veiculos_fotos_delete_auth" on storage.objects;
 create policy "veiculos_fotos_delete_auth" on storage.objects for delete
   using (bucket_id = 'veiculos-fotos' and auth.role() = 'authenticated');
 
@@ -352,8 +386,19 @@ create index if not exists idx_logs_acoes_usuario on logs_acoes (usuario_id);
 
 alter table logs_acoes enable row level security;
 
+-- Leitura: você sempre vê suas próprias ações; gerente/administrador vê
+-- tudo; qualquer autenticado também vê logs de veículos (entidade =
+-- 'veiculo') — é o que alimenta a aba "Histórico" no modal de edição para
+-- todos os níveis, já que saber quem mexeu num veículo é operacional, não
+-- sensível. O que fica de fato restrito a gerente/administrador é a
+-- trilha de login, configurações, usuários e backup.
 drop policy if exists "logs_acoes_select_auth" on logs_acoes;
-create policy "logs_acoes_select_auth" on logs_acoes for select using (auth.role() = 'authenticated');
+create policy "logs_acoes_select_auth" on logs_acoes for select
+  using (
+    auth.uid() = usuario_id
+    or public.current_user_role() in ('administrador', 'gerente')
+    or entidade = 'veiculo'
+  );
 drop policy if exists "logs_acoes_insert_self" on logs_acoes;
 create policy "logs_acoes_insert_self" on logs_acoes for insert with check (auth.role() = 'authenticated' and usuario_id = auth.uid());
 
@@ -400,9 +445,13 @@ drop policy if exists "veiculos_delete_auth" on veiculos;
 create policy "veiculos_delete_auth" on veiculos for delete using (public.current_user_role() in ('administrador', 'gerente'));
 
 drop policy if exists "consignacoes_auth_only" on consignacoes;
+drop policy if exists "consignacoes_select_auth" on consignacoes;
 create policy "consignacoes_select_auth" on consignacoes for select using (auth.role() = 'authenticated');
+drop policy if exists "consignacoes_insert_auth" on consignacoes;
 create policy "consignacoes_insert_auth" on consignacoes for insert with check (auth.role() = 'authenticated');
+drop policy if exists "consignacoes_update_auth" on consignacoes;
 create policy "consignacoes_update_auth" on consignacoes for update using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+drop policy if exists "consignacoes_delete_auth" on consignacoes;
 create policy "consignacoes_delete_auth" on consignacoes for delete using (public.current_user_role() in ('administrador', 'gerente'));
 
 -- Configurações da loja: só gerente/administrador altera.

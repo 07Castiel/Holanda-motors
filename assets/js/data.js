@@ -319,12 +319,23 @@ const HM = (function () {
    * desempenho não degrada conforme o estoque cresce, já que só a página
    * atual (e não o catálogo inteiro) trafega a cada consulta.
    */
-  async function getVehicles({ page = 0, pageSize = 20, search = '', tipo = '', badge = '' } = {}) {
+  async function getVehicles({ page = 0, pageSize = 20, search = '', tipo = '', badge = '', ativo, vendido, comFoto = false } = {}) {
+    // "midias_veiculo!inner" (em vez do embed normal) transforma o join em
+    // INNER — só entram veículos com pelo menos uma foto — resolvido no
+    // servidor, então funciona corretamente junto com a paginação (ao
+    // contrário de filtrar depois de já ter baixado a página).
+    const midiasEmbed = comFoto ? 'midias_veiculo!inner(id, url, principal)' : 'midias_veiculo(id, url, principal)';
     let query = supabaseClient
       .from('veiculos')
-      .select('*, marcas(nome), categorias(slug), midias_veiculo(id, url, principal)', { count: 'exact' })
+      .select(`*, marcas(nome), categorias(slug), ${midiasEmbed}`, { count: 'exact' })
       .order('created_at', { ascending: false });
 
+    // ativo/vendido são explícitos aqui (não só confiados ao RLS) porque
+    // esta mesma função é usada tanto pelo painel (autenticado, vê tudo)
+    // quanto pelo site público — sem isso, um gestor logado que abrisse o
+    // site público no mesmo navegador veria também veículos ocultos/vendidos.
+    if (typeof ativo === 'boolean') query = query.eq('ativo', ativo);
+    if (typeof vendido === 'boolean') query = query.eq('vendido', vendido);
     if (tipo) query = query.eq('categoria_id', await getCategoriaId(tipo));
     if (badge) query = query.eq('badge', badge);
 
