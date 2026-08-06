@@ -18,6 +18,18 @@
   let catalogState = { page: 0, pageSize: 9, filter: 'todos', marcaId: '', precoMin: null, precoMax: null, orderBy: 'recentes', rows: [], total: 0 };
   let lastFocusedEl = null;
 
+  /**
+   * Link de um veículo específico feito pra ser compartilhado (WhatsApp,
+   * "copiar link"). Aponta pra uma Edge Function no Supabase — não direto
+   * pro site — porque rastreadores de preview (WhatsApp etc.) não
+   * executam JavaScript e não veriam os dados do veículo se apontassem
+   * direto pro index.html. A function devolve as tags certas pro
+   * rastreador e redireciona quem clica de verdade pro site real.
+   */
+  function previewUrlFor(id) {
+    return SUPABASE_URL + '/functions/v1/vehicle-preview/' + encodeURIComponent(id);
+  }
+
   /* ── Aplica as configurações da loja em todos os pontos do site ── */
   function applyConfig() {
     const wppHref = HM.wppLink('Olá! Vim pelo site e gostaria de saber mais sobre os veículos da Holanda Motors.', cfg.wpp);
@@ -142,7 +154,7 @@
   }
 
   function renderCard(v) {
-    const wppMsg = `Olá! Vi o ${v.make} ${v.model} no site da Holanda Motors e gostaria de saber mais!`;
+    const wppMsg = `Olá! Vi o ${v.make} ${v.model} no site da Holanda Motors e gostaria de saber mais! ${previewUrlFor(v.id)}`;
     return `
     <article class="vehicle-card" data-tipo="${v.tipo}" data-badge="${v.badge}">
       <div class="vehicle-img ${v.img ? '' : 'no-image'}">
@@ -274,7 +286,7 @@
     lastFocusedEl = triggerEl || document.activeElement;
     modalVehicle = v;
 
-    const wppMsg = `Olá! Vi o ${v.make} ${v.model} no site da Holanda Motors e gostaria de saber mais!`;
+    const wppMsg = `Olá! Vi o ${v.make} ${v.model} no site da Holanda Motors e gostaria de saber mais! ${previewUrlFor(v.id)}`;
     modalPhotos = (v.imagens && v.imagens.length ? v.imagens : (v.img ? [{ url: v.img }] : []));
     modalPhotoIndex = 0;
     renderModalImage(modalPhotos[0] ? modalPhotos[0].url : '', v);
@@ -364,6 +376,20 @@
   document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
   document.getElementById('modalOverlay').addEventListener('click', e => {
     if (e.target === e.currentTarget) closeModal();
+  });
+
+  document.getElementById('modalCopyBtn').addEventListener('click', async () => {
+    if (!modalVehicle) return;
+    const btn = document.getElementById('modalCopyBtn');
+    const original = btn.textContent;
+    try {
+      await navigator.clipboard.writeText(previewUrlFor(modalVehicle.id));
+      btn.textContent = 'Link copiado!';
+    } catch (err) {
+      console.error('[site] Falha ao copiar link.', err);
+      btn.textContent = 'Não foi possível copiar';
+    }
+    setTimeout(() => { btn.textContent = original; }, 2200);
   });
 
   /* ── MENU MOBILE ── */

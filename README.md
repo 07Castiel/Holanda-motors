@@ -16,6 +16,7 @@ Site institucional e painel administrativo para a **Holanda Motors**, concession
 - [Como executar o projeto localmente](#como-executar-o-projeto-localmente)
 - [Migrando dados antigos do localStorage](#migrando-dados-antigos-do-localstorage)
 - [Como funcionam os arquivos principais](#como-funcionam-os-arquivos-principais)
+- [Preview ao compartilhar (Edge Function)](#preview-ao-compartilhar-edge-function)
 - [Publicando no GitHub Pages](#publicando-no-github-pages)
 - [Como adicionar novos administradores](#como-adicionar-novos-administradores)
 - [Níveis de acesso](#níveis-de-acesso)
@@ -56,7 +57,10 @@ holanda-motors/
 ├── README.md
 ├── .nojekyll                     # Evita processamento Jekyll no GitHub Pages
 ├── supabase/
-│   └── schema.sql                # Script único: tabelas, RLS, Storage e dados iniciais
+│   ├── schema.sql                # Script único: tabelas, RLS, Storage e dados iniciais
+│   └── functions/
+│       └── vehicle-preview/
+│           └── index.ts          # Edge Function: preview por veículo ao compartilhar (ver seção própria)
 └── assets/
     ├── css/
     │   ├── base.css               # Variáveis, reset, botões e badges compartilhados
@@ -156,7 +160,7 @@ Fonte única de verdade. Expõe um objeto global `HM` com funções como `HM.get
 
 ### `index.html` (site público) + `assets/js/site.js`
 
-Ao carregar, busca a configuração da loja e o veículo em destaque (uma única consulta leve, não o catálogo inteiro) para montar o hero. O catálogo é paginado: carrega a primeira leva de veículos ativos e mostra "Carregar mais veículos" no final da grade; trocar o filtro (Carros/Motos/Consignados) refaz a busca no servidor em vez de filtrar uma lista já baixada. O modal de detalhes mostra todas as fotos do veículo (não só a capa) com uma tira de miniaturas clicáveis, quando há mais de uma.
+Ao carregar, busca a configuração da loja e o veículo em destaque (uma única consulta leve, não o catálogo inteiro) para montar o hero. O catálogo é paginado: carrega a primeira leva de veículos ativos e mostra "Carregar mais veículos" no final da grade; trocar o filtro (Carros/Motos/Consignados) refaz a busca no servidor em vez de filtrar uma lista já baixada. O modal de detalhes mostra todas as fotos do veículo (não só a capa), navegáveis por setas ‹ › sobre a imagem (clique ou teclado) quando há mais de uma. Abrir um veículo atualiza a URL para `?veiculo=<id>` — o link da barra de endereço pode ser copiado e reaberto direto naquele veículo.
 
 ### `admin.html` (painel do gestor) + `assets/js/admin.js`
 
@@ -167,6 +171,23 @@ Ao carregar, busca a configuração da loja e o veículo em destaque (uma única
 5. **Usuários** — visível para administradores: lista quem tem acesso ao painel e permite alterar o nível de cada um.
 6. **Logs** — visível para gerentes/administradores: trilha completa de ações no painel, com filtro por área.
 7. **Configurações** — dados da loja, preferências de exibição do site, troca de senha, e a seção de backup/restauração (ver [Backup e restauração](#backup-e-restauração)) — essas duas últimas exigem nível gerente ou administrador.
+
+## Preview ao compartilhar (Edge Function)
+
+O site é 100% estático e os dados dos veículos só existem depois que o JavaScript roda no navegador — mas rastreadores de preview de link (WhatsApp, Instagram, Telegram...) **não executam JavaScript**. Sem ajuda, compartilhar o link de um veículo específico mostraria só um card genérico do site inteiro, nunca a foto/preço daquele carro.
+
+A solução é a Edge Function [`supabase/functions/vehicle-preview/index.ts`](supabase/functions/vehicle-preview/index.ts), publicada no seu próprio projeto Supabase:
+
+- Toda mensagem de WhatsApp montada pelo site (botão "Tenho interesse" e "Copiar link" no modal de detalhes, botão de WhatsApp nos cards do catálogo) usa a URL `https://SEU-PROJETO.supabase.co/functions/v1/vehicle-preview/<id>` em vez do link direto do site.
+- Essa function busca o veículo no banco e devolve uma página HTML só com as tags Open Graph/Twitter Card certas (foto, título, preço) — é só isso que o rastreador lê.
+- Um visitante de verdade é redirecionado automaticamente (`<meta http-equiv="refresh">` + JavaScript) para o site real, em `index.html?veiculo=<id>`, quase instantaneamente.
+- É pública (`verify_jwt` desativado no deploy) de propósito — precisa ser alcançável por qualquer rastreador ou visitante sem login, e só devolve dados de veículos já públicos no site (mesma regra de RLS: `ativo = true` e `vendido = false`).
+
+**Se você recriar o projeto Supabase do zero**, publique a function de novo (painel do Supabase → **Edge Functions** → **New function**, nome `vehicle-preview`, cole o conteúdo do arquivo, desmarque "Verify JWT" antes de publicar) ou via CLI:
+```bash
+supabase functions deploy vehicle-preview --project-ref SEU-PROJETO --no-verify-jwt
+```
+> O arquivo da function tem `SUPABASE_URL`, a chave `anon` e a URL do site (`SITE_URL`) fixas no topo — atualize os três se algum deles mudar.
 
 ## Publicando no GitHub Pages
 
