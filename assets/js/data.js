@@ -558,8 +558,25 @@ const HM = (function () {
   async function login(email, password) {
     const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    await logAction('login', 'sessao', null, { resumo: 'entrou no painel' });
     return data.session;
+  }
+
+  /** Redireciona para o consentimento do Google; a sessão volta pronta na
+   * mesma URL quando o navegador retorna (supabase-js lê o token da URL). */
+  async function loginWithGoogle() {
+    const { error } = await supabaseClient.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: location.origin + location.pathname },
+    });
+    if (error) throw error;
+  }
+
+  /** Registra "entrou no painel" uma vez por sessão nova de fato — chamada
+   * pelo evento SIGNED_IN do onAuthStateChange, não por dentro de login()/
+   * loginWithGoogle(), já que o login por Google só "termina" depois de um
+   * redirecionamento de página inteira (não dentro da função que o inicia). */
+  async function logSessionEntry() {
+    await logAction('login', 'sessao', null, { resumo: 'entrou no painel' });
   }
 
   async function logout() {
@@ -841,6 +858,8 @@ const HM = (function () {
     getLogs,
     // autenticação e usuários
     login,
+    loginWithGoogle,
+    logSessionEntry,
     logout,
     getSession,
     onAuthStateChange,

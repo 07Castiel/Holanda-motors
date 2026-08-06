@@ -54,6 +54,17 @@
     }
   });
 
+  document.getElementById('googleLoginBtn').addEventListener('click', async () => {
+    const errEl = document.getElementById('loginError');
+    errEl.textContent = '';
+    try {
+      await HM.loginWithGoogle();
+    } catch (err) {
+      console.error('[admin] Falha ao iniciar login com Google.', err);
+      errEl.textContent = 'Não foi possível iniciar o login com Google.';
+    }
+  });
+
   document.getElementById('logoutBtn').addEventListener('click', async () => {
     await HM.logout();
     showLoginScreen();
@@ -93,10 +104,16 @@
     }
   })();
 
-  /** Desloga automaticamente se a sessão expirar/for encerrada em outra aba. */
+  /** Desloga automaticamente se a sessão expirar/for encerrada em outra aba,
+   * e registra a entrada no painel quando uma sessão nova é criada de fato
+   * (login por senha ou volta do redirecionamento do Google) — não em
+   * releitura de sessão já existente ao reabrir a aba (evento INITIAL_SESSION). */
   HM.onAuthStateChange((session, event) => {
     if (event === 'SIGNED_OUT' && document.getElementById('adminApp').style.display !== 'none') {
       showLoginScreen();
+    }
+    if (event === 'SIGNED_IN') {
+      HM.logSessionEntry();
     }
   });
 
