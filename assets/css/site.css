@@ -65,8 +65,8 @@ nav[aria-label="Principal"] a:hover, nav[aria-label="Principal"] a:focus-visible
 
 .hero-visual { display: flex; align-items: center; justify-content: center; position: relative; }
 .hero-car-card { background: var(--dark); border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; width: 100%; max-width: 460px; }
-.hero-car-img { width: 100%; height: 260px; object-fit: cover; background: var(--dark2); position: relative; overflow: hidden; }
-.hero-car-img img { width: 100%; height: 100%; object-fit: cover; }
+.hero-car-img { width: 100%; height: 260px; background: var(--dark2); position: relative; overflow: hidden; }
+.hero-car-img img { width: 100%; height: 100%; object-fit: contain; }
 .hero-car-label { position: absolute; bottom: 16px; left: 16px; background: var(--red); color: var(--white); font-size: 10px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; padding: 4px 10px; border-radius: 2px; }
 .hero-car-info { padding: 20px 24px; }
 .hero-car-name { font-family: var(--font-display); font-weight: 700; font-size: 22px; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -112,7 +112,7 @@ nav[aria-label="Principal"] a:hover, nav[aria-label="Principal"] a:focus-visible
 .vehicle-card:hover { transform: translateY(-4px); border-color: rgba(255,255,255,0.18); }
 
 .vehicle-img { position: relative; height: 200px; overflow: hidden; background: var(--dark2); display: flex; align-items: center; justify-content: center; }
-.vehicle-img img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.4s; }
+.vehicle-img img { width: 100%; height: 100%; object-fit: contain; transition: transform 0.4s; }
 .vehicle-card:hover .vehicle-img img { transform: scale(1.04); }
 .vehicle-img.no-image::after {
   content: ''; position: absolute; inset: 0;
@@ -211,10 +211,10 @@ footer { background: var(--black); border-top: 1px solid rgba(255,255,255,0.07);
 .modal-overlay { position: fixed; inset: 0; z-index: 999; background: rgba(0,0,0,0.88); display: none; align-items: center; justify-content: center; padding: 20px; }
 .modal-overlay.open { display: flex; }
 .modal { background: var(--dark); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; max-width: 680px; width: 100%; max-height: 90vh; overflow-y: auto; position: relative; }
-.modal-img { width: 100%; height: 300px; object-fit: cover; background: var(--dark2); }
+.modal-img { width: 100%; height: 300px; background: var(--dark2); }
 .modal-thumbs { display: flex; gap: 8px; padding: 10px 32px 0; overflow-x: auto; }
 .modal-thumb { flex-shrink: 0; width: 56px; height: 42px; border-radius: 3px; overflow: hidden; border: 2px solid transparent; padding: 0; cursor: pointer; background: var(--dark2); }
-.modal-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.modal-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .modal-thumb.active { border-color: var(--red); }
 .modal-body { padding: 32px; }
 .modal-make { font-size: 11px; font-weight: 600; letter-spacing: 0.2em; text-transform: uppercase; color: var(--gray-light); }

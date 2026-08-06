@@ -229,7 +229,7 @@
 
   function renderModalImage(url, v) {
     document.getElementById('modalImg').innerHTML = url
-      ? `<img src="${escapeHtml(url)}" alt="${escapeHtml(v.make + ' ' + v.model)}" style="width:100%;height:300px;object-fit:cover;display:block;">`
+      ? `<img src="${escapeHtml(url)}" alt="${escapeHtml(v.make + ' ' + v.model)}" style="width:100%;height:300px;object-fit:contain;display:block;">`
       : '';
   }
 

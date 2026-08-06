@@ -93,7 +93,7 @@ tbody tr { border-bottom: 1px solid var(--border); transition: background .15s; 
 tbody tr:last-child { border-bottom: none; }
 tbody tr:hover { background: rgba(255,255,255,.02); }
 tbody td { padding: 14px 16px; font-size: 13px; vertical-align: middle; }
-.td-img { width: 56px; height: 40px; object-fit: cover; border-radius: 3px; background: var(--dark3); }
+.td-img { width: 56px; height: 40px; object-fit: contain; border-radius: 3px; background: var(--dark3); }
 .td-name { font-weight: 600; }
 .td-sub { font-size: 11px; color: var(--gray); margin-top: 2px; }
 .actions { display: flex; gap: 8px; align-items: center; }
@@ -129,9 +129,6 @@ tbody td { padding: 14px 16px; font-size: 13px; vertical-align: middle; }
 .img-upload-area { border: 2px dashed var(--border2); border-radius: 6px; background: var(--dark); padding: 24px; text-align: center; cursor: pointer; transition: .2s; position: relative; overflow: hidden; }
 .img-upload-area:hover, .img-upload-area.drag { border-color: var(--red); background: rgba(200,16,46,.05); }
 .img-upload-area input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
-.img-preview-wrap { position: relative; display: block; }
-.img-preview { width: 100%; max-height: 180px; object-fit: cover; border-radius: 4px; display: block; }
-.img-remove { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 50%; background: rgba(0,0,0,.7); border: none; color: #fff; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .upload-icon { opacity: .3; margin-bottom: 10px; }
 .upload-text { font-size: 13px; color: var(--gray); }
 .upload-text span { color: var(--red); font-weight: 600; }
@@ -209,7 +206,7 @@ tbody td { padding: 14px 16px; font-size: 13px; vertical-align: middle; }
 /* ── GALERIA DE FOTOS (múltiplas imagens no modal de veículo) ── */
 .img-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin-top: 12px; }
 .img-gallery-item { position: relative; border-radius: 4px; overflow: hidden; background: var(--dark3); aspect-ratio: 4/3; }
-.img-gallery-item img { width: 100%; height: 100%; object-fit: cover; }
+.img-gallery-item img { width: 100%; height: 100%; object-fit: contain; }
 .img-gallery-item .gallery-actions { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: space-between; padding: 5px; background: linear-gradient(180deg, rgba(0,0,0,.5), transparent 40%); opacity: 0; transition: .15s; }
 .img-gallery-item:hover .gallery-actions, .img-gallery-item .gallery-actions:focus-within { opacity: 1; }
 .img-gallery-item .gallery-btn { width: 22px; height: 22px; border-radius: 50%; border: none; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
