@@ -155,6 +155,8 @@ Se você usou uma versão anterior deste projeto (antes da migração para Supab
 
 Cria a instância única do client Supabase (`supabaseClient`), a partir da URL e da chave `anon` do seu projeto.
 
+> A Edge Function `vehicle-preview` (ver [Preview ao compartilhar](#preview-ao-compartilhar-edge-function)) roda em outro runtime (Deno, não o navegador) e por isso mantém sua própria cópia fixa da mesma URL e chave `anon`. Se você trocar de projeto Supabase, atualize os dois arquivos.
+
 ### `assets/js/data.js` (a peça que conecta tudo)
 
 Fonte única de verdade. Expõe um objeto global `HM` com funções como `HM.getVehicles()`, `HM.createVehicle()`, `HM.getConfig()`, `HM.login()` etc. — todas assíncronas (retornam `Promise`). Tanto `site.js` quanto `admin.js` usam **apenas** essas funções para acessar dados; nenhum dos dois fala com o Supabase diretamente. Isso é o que garante que os dois fiquem sempre sincronizados.

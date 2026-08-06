@@ -505,21 +505,26 @@
   function resetConsigState() { consigState = { page: 0, pageSize: 20, rows: [], total: 0 }; }
   document.getElementById('consigLoadMoreBtn').addEventListener('click', () => loadConsigPage(false));
 
+  let consigRequestToken = 0;
+
   async function loadConsigPage(reset) {
+    const requestToken = ++consigRequestToken;
     const pageToLoad = reset ? 0 : consigState.page + 1;
     const btn = document.getElementById('consigLoadMoreBtn');
     btn.disabled = true;
     try {
       const { rows, total } = await HM.getConsigs({ page: pageToLoad, pageSize: consigState.pageSize });
+      if (requestToken !== consigRequestToken) return;
       consigState.page = pageToLoad;
       consigState.rows = reset ? rows : consigState.rows.concat(rows);
       consigState.total = total;
       renderConsigTable();
     } catch (err) {
+      if (requestToken !== consigRequestToken) return;
       console.error('[admin] Falha ao carregar consignações.', err);
       toast('Não foi possível carregar as consignações.', 'error');
     } finally {
-      btn.disabled = false;
+      if (requestToken === consigRequestToken) btn.disabled = false;
     }
   }
 
@@ -832,21 +837,26 @@
   document.getElementById('filterLogEntidade').addEventListener('change', e => { logsState.entidade = e.target.value; loadLogsPage(true); });
   document.getElementById('logsLoadMoreBtn').addEventListener('click', () => loadLogsPage(false));
 
+  let logsRequestToken = 0;
+
   async function loadLogsPage(reset) {
+    const requestToken = ++logsRequestToken;
     const pageToLoad = reset ? 0 : logsState.page + 1;
     const btn = document.getElementById('logsLoadMoreBtn');
     btn.disabled = true;
     try {
       const { rows, total } = await HM.getLogs({ page: pageToLoad, pageSize: logsState.pageSize, entidade: logsState.entidade });
+      if (requestToken !== logsRequestToken) return;
       logsState.page = pageToLoad;
       logsState.rows = reset ? rows : logsState.rows.concat(rows);
       logsState.total = total;
       renderLogsTable();
     } catch (err) {
+      if (requestToken !== logsRequestToken) return;
       console.error('[admin] Falha ao carregar logs.', err);
       toast('Não foi possível carregar os logs.', 'error');
     } finally {
-      btn.disabled = false;
+      if (requestToken === logsRequestToken) btn.disabled = false;
     }
   }
 

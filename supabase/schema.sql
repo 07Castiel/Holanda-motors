@@ -583,3 +583,178 @@ create policy "interacoes_insert_public" on interacoes_veiculo for insert with c
 
 drop policy if exists "interacoes_select_auth" on interacoes_veiculo;
 create policy "interacoes_select_auth" on interacoes_veiculo for select using (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- PARTE 6 — Auditoria de segurança e performance (achados do Advisor do Supabase)
+-- ----------------------------------------------------------------------------
+-- Corrige achados do linter oficial (aba Advisors do dashboard): search_path
+-- mutável em funções SECURITY DEFINER, funções de trigger executáveis via
+-- RPC público sem necessidade, políticas de RLS reavaliando
+-- auth.role()/auth.uid() a cada linha em vez de uma vez por consulta, e
+-- políticas permissivas duplicadas nas tabelas de leitura pública.
+-- Idempotente como o resto do arquivo.
+-- ============================================================================
+
+-- search_path fixo (mitiga sequestro de resolução de nomes por SECURITY
+-- DEFINER caso alguma role ganhe CREATE em public no futuro).
+create or replace function public.current_user_role()
+returns text
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select role from public.usuarios where id = auth.uid();
+$$;
+
+create or replace function public.prevent_role_self_escalation()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.role is distinct from old.role and public.current_user_role() <> 'administrador' then
+    raise exception 'Apenas administradores podem alterar o nível de acesso de um usuário.';
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.toggle_veiculo_ativo(p_id uuid)
+returns boolean
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  novo_estado boolean;
+begin
+  update veiculos set ativo = not ativo, updated_at = now()
+  where id = p_id
+  returning ativo into novo_estado;
+
+  if novo_estado is null then
+    raise exception 'Veículo não encontrado.';
+  end if;
+  return novo_estado;
+end;
+$$;
+
+-- handle_new_user e prevent_role_self_escalation só existem para disparar via
+-- trigger — revogar de PUBLIC fecha a chamada via RPC direta sem afetar o
+-- disparo automático dos triggers (não depende do chamador ter EXECUTE).
+-- current_user_role() continua acessível a PUBLIC de propósito: é usada
+-- dentro de outras políticas de RLS, inclusive em tabelas que o anônimo
+-- também consulta — revogar quebraria a avaliação dessas políticas para
+-- visitantes não autenticados.
+revoke execute on function public.handle_new_user() from public, anon, authenticated;
+revoke execute on function public.prevent_role_self_escalation() from public, anon, authenticated;
+
+-- ── RLS: elimina políticas permissivas duplicadas e evita reavaliar
+-- auth.role()/auth.uid()/current_user_role() linha a linha ──
+
+drop policy if exists "categorias_write_auth" on categorias;
+drop policy if exists "categorias_insert_auth" on categorias;
+create policy "categorias_insert_auth" on categorias for insert with check ((select auth.role()) = 'authenticated');
+drop policy if exists "categorias_update_auth" on categorias;
+create policy "categorias_update_auth" on categorias for update using ((select auth.role()) = 'authenticated') with check ((select auth.role()) = 'authenticated');
+drop policy if exists "categorias_delete_auth" on categorias;
+create policy "categorias_delete_auth" on categorias for delete using ((select auth.role()) = 'authenticated');
+
+drop policy if exists "marcas_write_auth" on marcas;
+drop policy if exists "marcas_insert_auth" on marcas;
+create policy "marcas_insert_auth" on marcas for insert with check ((select auth.role()) = 'authenticated');
+drop policy if exists "marcas_update_auth" on marcas;
+create policy "marcas_update_auth" on marcas for update using ((select auth.role()) = 'authenticated') with check ((select auth.role()) = 'authenticated');
+drop policy if exists "marcas_delete_auth" on marcas;
+create policy "marcas_delete_auth" on marcas for delete using ((select auth.role()) = 'authenticated');
+
+drop policy if exists "midias_write_auth" on midias_veiculo;
+drop policy if exists "midias_insert_auth" on midias_veiculo;
+create policy "midias_insert_auth" on midias_veiculo for insert with check ((select auth.role()) = 'authenticated');
+drop policy if exists "midias_update_auth" on midias_veiculo;
+create policy "midias_update_auth" on midias_veiculo for update using ((select auth.role()) = 'authenticated') with check ((select auth.role()) = 'authenticated');
+drop policy if exists "midias_delete_auth" on midias_veiculo;
+create policy "midias_delete_auth" on midias_veiculo for delete using ((select auth.role()) = 'authenticated');
+
+-- veiculos: "select_public_ativos" e "select_auth_todos" eram duas políticas
+-- de SELECT avaliadas em toda consulta — mescladas em uma só com OR, mesmo
+-- resultado (autenticado vê tudo, anônimo só ativo+não vendido).
+drop policy if exists "veiculos_select_public_ativos" on veiculos;
+drop policy if exists "veiculos_select_auth_todos" on veiculos;
+drop policy if exists "veiculos_select" on veiculos;
+create policy "veiculos_select" on veiculos for select
+  using ((select auth.role()) = 'authenticated' or (ativo = true and vendido = false));
+
+drop policy if exists "veiculos_write_auth" on veiculos;
+create policy "veiculos_write_auth" on veiculos for insert with check ((select auth.role()) = 'authenticated');
+drop policy if exists "veiculos_update_auth" on veiculos;
+create policy "veiculos_update_auth" on veiculos for update using ((select auth.role()) = 'authenticated') with check ((select auth.role()) = 'authenticated');
+drop policy if exists "veiculos_delete_auth" on veiculos;
+create policy "veiculos_delete_auth" on veiculos for delete using ((select public.current_user_role()) in ('administrador', 'gerente'));
+
+drop policy if exists "consignacoes_select_auth" on consignacoes;
+create policy "consignacoes_select_auth" on consignacoes for select using ((select auth.role()) = 'authenticated');
+drop policy if exists "consignacoes_insert_auth" on consignacoes;
+create policy "consignacoes_insert_auth" on consignacoes for insert with check ((select auth.role()) = 'authenticated');
+drop policy if exists "consignacoes_update_auth" on consignacoes;
+create policy "consignacoes_update_auth" on consignacoes for update using ((select auth.role()) = 'authenticated') with check ((select auth.role()) = 'authenticated');
+drop policy if exists "consignacoes_delete_auth" on consignacoes;
+create policy "consignacoes_delete_auth" on consignacoes for delete using ((select public.current_user_role()) in ('administrador', 'gerente'));
+
+drop policy if exists "config_write_auth" on configuracoes_loja;
+create policy "config_write_auth" on configuracoes_loja for update using ((select public.current_user_role()) in ('administrador', 'gerente')) with check ((select public.current_user_role()) in ('administrador', 'gerente'));
+
+drop policy if exists "atividades_auth_only" on atividades;
+create policy "atividades_auth_only" on atividades for all using ((select auth.role()) = 'authenticated') with check ((select auth.role()) = 'authenticated');
+
+drop policy if exists "usuarios_select_auth" on usuarios;
+create policy "usuarios_select_auth" on usuarios for select
+  using ((select auth.uid()) = id or (select public.current_user_role()) in ('administrador', 'gerente'));
+drop policy if exists "usuarios_upsert_self" on usuarios;
+create policy "usuarios_upsert_self" on usuarios for insert with check ((select auth.uid()) = id);
+drop policy if exists "usuarios_update_self" on usuarios;
+create policy "usuarios_update_self" on usuarios for update
+  using ((select auth.uid()) = id or (select public.current_user_role()) = 'administrador')
+  with check ((select auth.uid()) = id or (select public.current_user_role()) = 'administrador');
+
+drop policy if exists "logs_acoes_select_auth" on logs_acoes;
+create policy "logs_acoes_select_auth" on logs_acoes for select
+  using (
+    (select auth.uid()) = usuario_id
+    or (select public.current_user_role()) in ('administrador', 'gerente')
+    or entidade = 'veiculo'
+  );
+drop policy if exists "logs_acoes_insert_self" on logs_acoes;
+create policy "logs_acoes_insert_self" on logs_acoes for insert with check ((select auth.role()) = 'authenticated' and usuario_id = (select auth.uid()));
+
+drop policy if exists "interacoes_select_auth" on interacoes_veiculo;
+create policy "interacoes_select_auth" on interacoes_veiculo for select using ((select auth.role()) = 'authenticated');
+
+drop policy if exists "veiculos_fotos_write_auth" on storage.objects;
+create policy "veiculos_fotos_write_auth" on storage.objects for insert
+  with check (bucket_id = 'veiculos-fotos' and (select auth.role()) = 'authenticated');
+
+drop policy if exists "veiculos_fotos_update_auth" on storage.objects;
+create policy "veiculos_fotos_update_auth" on storage.objects for update
+  using (bucket_id = 'veiculos-fotos' and (select auth.role()) = 'authenticated')
+  with check (bucket_id = 'veiculos-fotos' and (select auth.role()) = 'authenticated');
+
+drop policy if exists "veiculos_fotos_delete_auth" on storage.objects;
+create policy "veiculos_fotos_delete_auth" on storage.objects for delete
+  using (bucket_id = 'veiculos-fotos' and (select auth.role()) = 'authenticated');
+
+-- pg_trgm fora do schema public (ALTER EXTENSION ... SET SCHEMA preserva os
+-- índices GIN já criados, não precisa recriá-los).
+create schema if not exists extensions;
+do $$
+begin
+  if exists (
+    select 1 from pg_extension e
+    join pg_namespace n on n.oid = e.extnamespace
+    where e.extname = 'pg_trgm' and n.nspname = 'public'
+  ) then
+    alter extension pg_trgm set schema extensions;
+  end if;
+end $$;
