@@ -2,7 +2,7 @@
  * data.js — Camada de dados compartilhada (Holanda Motors)
  * -----------------------------------------------------------
  * Fonte única de verdade para o site público (index.html) e o painel do
- * gestor (admin.html). Os dois arquivos só acessam dados através do objeto
+ * gestor (admin/index.html). Os dois arquivos só acessam dados através do objeto
  * global HM — nenhum dos dois fala com o Supabase diretamente.
  *
  * Toda a persistência é feita no Supabase (Postgres + Auth + Storage). Toda

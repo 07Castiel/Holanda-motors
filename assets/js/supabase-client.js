@@ -1,6 +1,6 @@
 /**
  * supabase-client.js — configuração e instância única do client Supabase.
- * Carregado ANTES de data.js em index.html e admin.html (que por sua vez
+ * Carregado ANTES de data.js em index.html e admin/index.html (que por sua vez
  * é carregado antes do supabase-js via CDN, veja a ordem de <script> no HTML).
  *
  * A "anon key" abaixo é pública por desenho do Supabase — a segurança real

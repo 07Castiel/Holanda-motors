@@ -1,5 +1,5 @@
 /**
- * admin.js — lógica do painel do gestor (admin.html)
+ * admin.js — lógica do painel do gestor (servido em /admin/)
  * Toda leitura/escrita de dados passa por HM (data.js) — autenticação real
  * (Supabase Auth), banco (Postgres com RLS) e fotos (Supabase Storage).
  *

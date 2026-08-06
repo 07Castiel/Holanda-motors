@@ -31,7 +31,7 @@ Site institucional e painel administrativo para a **Holanda Motors**, concession
 O projeto tem duas frentes que conversam entre si através do Supabase:
 
 1. **`index.html`** — o site público. Catálogo de veículos com filtros, seção de consignação, sobre a loja, contato e botões de WhatsApp prontos.
-2. **`admin.html`** — o painel do gestor. Login real (Supabase Auth), dashboard com métricas, CRUD completo de veículos (com upload de foto para o Supabase Storage), gestão de consignações e configurações da loja.
+2. **`/admin/`** — o painel do gestor. Login real (Supabase Auth), dashboard com métricas, CRUD completo de veículos (com upload de foto para o Supabase Storage), gestão de consignações e configurações da loja.
 
 Qualquer alteração feita no painel (adicionar um veículo, trocar uma foto, mudar o WhatsApp da loja) aparece automaticamente no site público na próxima vez que a página for carregada — sem precisar editar código, e agora **sincronizado entre qualquer dispositivo/navegador**, já que os dados vivem no banco, não mais no navegador de cada um.
 
@@ -52,7 +52,9 @@ Não há etapa de build, bundler ou transpilação — os arquivos rodam exatame
 ```
 holanda-motors/
 ├── index.html                    # Site público
-├── admin.html                    # Painel do gestor
+├── admin.html                    # Redireciona para /admin/ (compatibilidade com o endereço antigo)
+├── admin/
+│   └── index.html                # Painel do gestor (URL final: /admin/)
 ├── migrar-localstorage.html      # Ferramenta temporária de migração, idempotente (ver seção própria) — apague após o uso
 ├── README.md
 ├── .nojekyll                     # Evita processamento Jekyll no GitHub Pages
@@ -126,7 +128,7 @@ Com Python (já vem instalado na maioria dos sistemas):
 cd holanda-motors
 python3 -m http.server 8000
 ```
-Acesse `http://localhost:8000` (site) e `http://localhost:8000/admin.html` (painel).
+Acesse `http://localhost:8000` (site) e `http://localhost:8000/admin/` (painel).
 
 Com Node.js:
 ```bash
@@ -167,7 +169,7 @@ Ao carregar, busca a configuração da loja e o veículo em destaque (uma única
 
 Cada card e o modal também mostram uma simulação de parcelamento ("a partir de Nx de R$...") calculada no navegador (tabela Price/juros compostos) a partir da taxa, entrada padrão e nº máximo de parcelas configurados em Configurações → Simulador de parcelamento — deixa claro que é uma estimativa, não uma oferta de crédito real. Pode ser desligado inteiramente por lá.
 
-### `admin.html` (painel do gestor) + `assets/js/admin.js`
+### `admin/index.html` (painel do gestor) + `assets/js/admin.js`
 
 1. **Login** — `HM.login(email, senha)` autentica no Supabase Auth. A sessão persiste entre recarregamentos e é encerrada automaticamente se expirar ou for revogada em outra aba.
 2. **Dashboard** — métricas de total cadastrado, vendidos, destaques e consignações (contagens feitas no servidor, sem baixar o estoque inteiro) + atividade recente + "Mais vistos" (top 5 veículos por visualização no site público).
@@ -211,13 +213,13 @@ supabase functions deploy vehicle-preview --project-ref SEU-PROJETO --no-verify-
    - Aguarde 1–2 minutos. O link publicado aparece no topo da página: `https://SEU-USUARIO.github.io/holanda-motors/`
 4. **Acesse:**
    - Site público: `https://SEU-USUARIO.github.io/holanda-motors/`
-   - Painel do gestor: `https://SEU-USUARIO.github.io/holanda-motors/admin.html`
+   - Painel do gestor: `https://SEU-USUARIO.github.io/holanda-motors/admin/`
 
 > O arquivo `.nojekyll` na raiz evita que o GitHub tente processar os arquivos com o Jekyll. A chave `anon` do Supabase pode ir para o repositório público sem problema (ver [Configurando o Supabase do zero](#configurando-o-supabase-do-zero)) — a segurança real está nas políticas de RLS.
 
 ## Como adicionar novos administradores
 
-O acesso ao painel é controlado inteiramente pelo Supabase Auth — qualquer usuário criado lá pode logar em `admin.html`.
+O acesso ao painel é controlado inteiramente pelo Supabase Auth — qualquer usuário criado lá pode logar em `/admin/`. Não existe link público para o painel a partir do site (por design, para não expor a área de gestão) — o endereço é acessado diretamente pelo gestor.
 
 1. No dashboard do Supabase, vá em **Authentication → Users → Add user → Create new user**.
 2. Preencha e-mail e uma senha temporária, e marque **Auto Confirm User** (senão o usuário precisaria confirmar por e-mail antes do primeiro login).

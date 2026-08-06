@@ -1,5 +1,5 @@
 /**
- * admin.css — estilos exclusivos do painel do gestor (admin.html).
+ * admin.css — estilos exclusivos do painel do gestor (servido em /admin/).
  * Variáveis, reset, badges e o link "pular para o conteúdo" vivem em base.css.
  * Os botões abaixo sobrescrevem os de base.css intencionalmente: a UI de
  * gestão precisa de controles mais compactos que os CTAs de marketing do site.

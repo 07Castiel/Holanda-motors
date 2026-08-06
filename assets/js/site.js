@@ -1,7 +1,7 @@
 /**
  * site.js — lógica do site público (index.html)
  * Lê tudo através de HM (data.js): veículos, configurações da loja etc.
- * Qualquer alteração salva pelo painel do gestor (admin.html) aparece
+ * Qualquer alteração salva pelo painel do gestor (/admin/) aparece
  * aqui na próxima vez que a página for carregada.
  *
  * O catálogo é paginado (carregamento incremental) em vez de baixar o
