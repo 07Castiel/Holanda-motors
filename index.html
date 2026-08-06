@@ -237,8 +237,11 @@
 <div class="modal-overlay" id="modalOverlay" role="dialog" aria-modal="true" aria-labelledby="modalModel" hidden>
   <div class="modal">
     <button class="modal-close" id="modalCloseBtn" aria-label="Fechar detalhes do veículo">✕</button>
-    <div class="modal-img" id="modalImg" role="img"></div>
-    <div class="modal-thumbs" id="modalThumbs"></div>
+    <div class="modal-photo">
+      <div class="modal-img" id="modalImg" role="img"></div>
+      <button type="button" class="modal-nav prev" id="modalPrevBtn" aria-label="Foto anterior" hidden>‹</button>
+      <button type="button" class="modal-nav next" id="modalNextBtn" aria-label="Próxima foto" hidden>›</button>
+    </div>
     <div class="modal-body">
       <p class="modal-make" id="modalMake"></p>
       <h2 class="modal-model" id="modalModel"></h2>

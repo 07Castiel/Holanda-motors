@@ -185,24 +185,23 @@
   document.getElementById('loadMoreBtn').addEventListener('click', () => loadCatalogPage(false));
 
   /* ── MODAL DE DETALHES (acessível: foco preso, ESC fecha, foco retorna ao gatilho) ── */
+  let modalVehicle = null;
+  let modalPhotos = [];
+  let modalPhotoIndex = 0;
+
   function openModal(id, triggerEl) {
     const v = catalogState.rows.find(x => x.id === id);
     if (!v) return;
     lastFocusedEl = triggerEl || document.activeElement;
+    modalVehicle = v;
 
     const wppMsg = `Olá! Vi o ${v.make} ${v.model} no site da Holanda Motors e gostaria de saber mais!`;
-    const fotos = (v.imagens && v.imagens.length ? v.imagens : (v.img ? [{ url: v.img }] : []));
-    renderModalImage(fotos[0] ? fotos[0].url : '', v);
-    document.getElementById('modalThumbs').innerHTML = fotos.length > 1
-      ? fotos.map((f, i) => `<button type="button" class="modal-thumb ${i === 0 ? 'active' : ''}" data-thumb="${escapeHtml(f.url)}"><img src="${escapeHtml(f.url)}" alt=""></button>`).join('')
-      : '';
-    document.getElementById('modalThumbs').querySelectorAll('[data-thumb]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        renderModalImage(btn.dataset.thumb, v);
-        document.getElementById('modalThumbs').querySelectorAll('.modal-thumb').forEach(t => t.classList.remove('active'));
-        btn.classList.add('active');
-      });
-    });
+    modalPhotos = (v.imagens && v.imagens.length ? v.imagens : (v.img ? [{ url: v.img }] : []));
+    modalPhotoIndex = 0;
+    renderModalImage(modalPhotos[0] ? modalPhotos[0].url : '', v);
+    const temVariasFotos = modalPhotos.length > 1;
+    document.getElementById('modalPrevBtn').hidden = !temVariasFotos;
+    document.getElementById('modalNextBtn').hidden = !temVariasFotos;
 
     document.getElementById('modalMake').textContent = v.make;
     document.getElementById('modalModel').textContent = v.model;
@@ -233,6 +232,16 @@
       : '';
   }
 
+  /** Troca a foto exibida no modal (setas ‹ › ou teclado) — o índice dá a volta nas pontas. */
+  function showModalPhoto(delta) {
+    if (modalPhotos.length < 2) return;
+    modalPhotoIndex = (modalPhotoIndex + delta + modalPhotos.length) % modalPhotos.length;
+    renderModalImage(modalPhotos[modalPhotoIndex].url, modalVehicle);
+  }
+
+  document.getElementById('modalPrevBtn').addEventListener('click', () => showModalPhoto(-1));
+  document.getElementById('modalNextBtn').addEventListener('click', () => showModalPhoto(1));
+
   function closeModal() {
     const overlay = document.getElementById('modalOverlay');
     overlay.classList.remove('open');
@@ -244,6 +253,8 @@
 
   function onModalKeydown(e) {
     if (e.key === 'Escape') { closeModal(); return; }
+    if (e.key === 'ArrowLeft') { showModalPhoto(-1); return; }
+    if (e.key === 'ArrowRight') { showModalPhoto(1); return; }
     if (e.key !== 'Tab') return;
     const overlay = document.getElementById('modalOverlay');
     const focusables = overlay.querySelectorAll('a[href], button:not([disabled])');
