@@ -233,6 +233,14 @@ const HM = (function () {
     throw error;
   }
 
+  /** Marcas com pelo menos um veículo ativo/à venda — para o filtro do site público (não lista marcas sem nenhum anúncio visível). */
+  async function getMarcasDisponiveis() {
+    const rows = unwrap(await supabaseClient.from('veiculos').select('marca_id, marcas(id, nome)').eq('ativo', true).eq('vendido', false));
+    const vistas = new Map();
+    rows.forEach(r => { if (r.marcas) vistas.set(r.marcas.id, r.marcas.nome); });
+    return Array.from(vistas, ([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  }
+
   /** Só um veículo pode ser "destaque" por vez — desmarca os demais. */
   async function clearDestaque(exceptId) {
     let query = supabaseClient.from('veiculos').update({ badge: 'seminovo' }).eq('badge', 'destaque');
@@ -319,7 +327,7 @@ const HM = (function () {
    * desempenho não degrada conforme o estoque cresce, já que só a página
    * atual (e não o catálogo inteiro) trafega a cada consulta.
    */
-  async function getVehicles({ page = 0, pageSize = 20, search = '', tipo = '', badge = '', ativo, vendido, comFoto = false } = {}) {
+  async function getVehicles({ page = 0, pageSize = 20, search = '', tipo = '', badge = '', ativo, vendido, comFoto = false, marcaId = '', precoMin, precoMax, orderBy = 'recentes' } = {}) {
     // "midias_veiculo!inner" (em vez do embed normal) transforma o join em
     // INNER — só entram veículos com pelo menos uma foto — resolvido no
     // servidor, então funciona corretamente junto com a paginação (ao
@@ -327,8 +335,15 @@ const HM = (function () {
     const midiasEmbed = comFoto ? 'midias_veiculo!inner(id, url, principal)' : 'midias_veiculo(id, url, principal)';
     let query = supabaseClient
       .from('veiculos')
-      .select(`*, marcas(nome), categorias(slug), ${midiasEmbed}`, { count: 'exact' })
-      .order('created_at', { ascending: false });
+      .select(`*, marcas(nome), categorias(slug), ${midiasEmbed}`, { count: 'exact' });
+
+    const ORDENACOES = {
+      'recentes': { column: 'created_at', ascending: false },
+      'menor-preco': { column: 'preco', ascending: true },
+      'maior-preco': { column: 'preco', ascending: false },
+    };
+    const ordenacao = ORDENACOES[orderBy] || ORDENACOES.recentes;
+    query = query.order(ordenacao.column, { ascending: ordenacao.ascending });
 
     // ativo/vendido são explícitos aqui (não só confiados ao RLS) porque
     // esta mesma função é usada tanto pelo painel (autenticado, vê tudo)
@@ -338,6 +353,9 @@ const HM = (function () {
     if (typeof vendido === 'boolean') query = query.eq('vendido', vendido);
     if (tipo) query = query.eq('categoria_id', await getCategoriaId(tipo));
     if (badge) query = query.eq('badge', badge);
+    if (marcaId) query = query.eq('marca_id', marcaId);
+    if (typeof precoMin === 'number') query = query.gte('preco', precoMin);
+    if (typeof precoMax === 'number') query = query.lte('preco', precoMax);
 
     // Remove vírgulas/parênteses: têm significado estrutural no filtro
     // ".or()" do PostgREST e quebrariam a sintaxe se viessem do texto digitado.
@@ -362,6 +380,13 @@ const HM = (function () {
     if (destaque) return mapVehicleRow(destaque);
     const recente = unwrap(await supabaseClient.from('veiculos').select(select).eq('ativo', true).eq('vendido', false).order('created_at', { ascending: false }).limit(1).maybeSingle());
     return recente ? mapVehicleRow(recente) : null;
+  }
+
+  /** Busca um veículo específico pelo id — usado pelo link direto (?veiculo=) quando o veículo compartilhado não está na página atualmente carregada. Só retorna se estiver visível ao público (mesma regra do catálogo). */
+  async function getVehicleById(id) {
+    const select = '*, marcas(nome), categorias(slug), midias_veiculo(id, url, principal)';
+    const row = unwrap(await supabaseClient.from('veiculos').select(select).eq('id', id).eq('ativo', true).eq('vendido', false).maybeSingle());
+    return row ? mapVehicleRow(row) : null;
   }
 
   /** Contagens para os cards do dashboard — usa `count: 'exact', head: true` (só o número, sem baixar as linhas). */
@@ -731,6 +756,8 @@ const HM = (function () {
     getVehicles,
     getVehicleStats,
     getFeaturedVehicle,
+    getVehicleById,
+    getMarcasDisponiveis,
     getCategorias,
     createVehicle,
     updateVehicle,

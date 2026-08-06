@@ -5,6 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Holanda Motors — Carros e Motos em Sobral, CE</title>
 <meta name="description" content="Concessionária de carros e motos seminovos em Sobral, Ceará. Compra, venda e consignação de veículos com atendimento transparente.">
+
+<!-- Open Graph / Twitter Card — preview ao compartilhar o link (WhatsApp, Instagram, etc.) -->
+<meta property="og:type" content="website">
+<meta property="og:locale" content="pt_BR">
+<meta property="og:site_name" content="Holanda Motors">
+<meta property="og:title" content="Holanda Motors — Carros e Motos em Sobral, CE">
+<meta property="og:description" content="Carros e motos seminovos com qualidade de showroom, atendimento transparente e o melhor preço de Sobral. Confira o estoque.">
+<meta property="og:image" content="https://07castiel.github.io/Holanda-motors/fachada.PNG">
+<meta property="og:url" content="https://07castiel.github.io/Holanda-motors/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Holanda Motors — Carros e Motos em Sobral, CE">
+<meta name="twitter:description" content="Carros e motos seminovos com qualidade de showroom, atendimento transparente e o melhor preço de Sobral.">
+<meta name="twitter:image" content="https://07castiel.github.io/Holanda-motors/fachada.PNG">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
@@ -88,6 +102,24 @@
         <button class="filter-btn" data-filter="carro" aria-pressed="false">Carros</button>
         <button class="filter-btn" data-filter="moto" aria-pressed="false">Motos</button>
         <button class="filter-btn" data-filter="consignado" aria-pressed="false">Consignados</button>
+      </div>
+
+      <div class="filters-adv" role="group" aria-label="Filtrar por marca, preço e ordenação">
+        <label class="sr-only" for="filterMarca">Marca</label>
+        <select class="filters-adv-field" id="filterMarca">
+          <option value="">Todas as marcas</option>
+        </select>
+        <label class="sr-only" for="filterPrecoMin">Preço mínimo</label>
+        <input class="filters-adv-field" type="number" id="filterPrecoMin" placeholder="Preço mín." min="0" step="1000" inputmode="numeric">
+        <label class="sr-only" for="filterPrecoMax">Preço máximo</label>
+        <input class="filters-adv-field" type="number" id="filterPrecoMax" placeholder="Preço máx." min="0" step="1000" inputmode="numeric">
+        <label class="sr-only" for="filterOrdenar">Ordenar por</label>
+        <select class="filters-adv-field" id="filterOrdenar">
+          <option value="recentes">Mais recentes</option>
+          <option value="menor-preco">Menor preço</option>
+          <option value="maior-preco">Maior preço</option>
+        </select>
+        <button type="button" class="filters-adv-clear" id="filterClearBtn" hidden>Limpar filtros</button>
       </div>
 
       <div class="vehicles-grid" id="vehiclesGrid" aria-live="polite"></div>

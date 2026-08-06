@@ -15,7 +15,7 @@
   const badgeLabel = { destaque: 'Destaque', seminovo: 'Seminovo', consignado: 'Consignado' };
 
   let cfg = null;
-  let catalogState = { page: 0, pageSize: 9, filter: 'todos', rows: [], total: 0 };
+  let catalogState = { page: 0, pageSize: 9, filter: 'todos', marcaId: '', precoMin: null, precoMax: null, orderBy: 'recentes', rows: [], total: 0 };
   let lastFocusedEl = null;
 
   /* ── Aplica as configurações da loja em todos os pontos do site ── */
@@ -97,26 +97,37 @@
   }
 
   /* ── CATÁLOGO (paginado) ── */
+  // Token de requisição: se o usuário mexer em outro filtro antes desta
+  // consulta voltar, a resposta antiga (agora obsoleta) é descartada em vez
+  // de sobrescrever o resultado mais recente na tela.
+  let catalogRequestToken = 0;
+
   async function loadCatalogPage(reset) {
+    const requestToken = ++catalogRequestToken;
     const pageToLoad = reset ? 0 : catalogState.page + 1;
     // ativo/vendido são pedidos explicitamente (não só confiados ao RLS):
     // se um gestor estiver logado neste mesmo navegador, a política de RLS
     // para autenticados deixaria ver TODO o estoque — esses filtros
     // garantem que o site público sempre mostra só o que pode ser vendido,
     // não importa quem esteja com sessão aberta.
-    const opts = { page: pageToLoad, pageSize: catalogState.pageSize, ativo: true, vendido: false, comFoto: !!cfg.nophoto };
+    const opts = { page: pageToLoad, pageSize: catalogState.pageSize, ativo: true, vendido: false, comFoto: !!cfg.nophoto, orderBy: catalogState.orderBy };
     if (catalogState.filter === 'carro' || catalogState.filter === 'moto') opts.tipo = catalogState.filter;
     if (catalogState.filter === 'consignado') opts.badge = 'consignado';
+    if (catalogState.marcaId) opts.marcaId = catalogState.marcaId;
+    if (catalogState.precoMin != null) opts.precoMin = catalogState.precoMin;
+    if (catalogState.precoMax != null) opts.precoMax = catalogState.precoMax;
 
     const loadMoreBtn = document.getElementById('loadMoreBtn');
     loadMoreBtn.disabled = true;
     try {
       const { rows, total } = await HM.getVehicles(opts);
+      if (requestToken !== catalogRequestToken) return; // uma busca mais nova já foi disparada — ignora esta resposta
       catalogState.page = pageToLoad;
       catalogState.rows = reset ? rows : catalogState.rows.concat(rows);
       catalogState.total = total;
       renderVehicles();
     } catch (err) {
+      if (requestToken !== catalogRequestToken) return;
       console.error('[site] Falha ao carregar veículos.', err);
       if (reset) {
         document.getElementById('vehiclesGrid').innerHTML = `
@@ -185,6 +196,67 @@
     loadCatalogPage(true);
   }
 
+  /* ── FILTROS AVANÇADOS (marca, faixa de preço, ordenação) ── */
+  async function populateMarcaFilter() {
+    try {
+      const marcas = await HM.getMarcasDisponiveis();
+      const select = document.getElementById('filterMarca');
+      marcas.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.nome;
+        select.appendChild(opt);
+      });
+    } catch (err) {
+      console.error('[site] Falha ao carregar marcas para o filtro.', err);
+    }
+  }
+
+  function updateFilterClearVisibility() {
+    const ativos = catalogState.marcaId || catalogState.precoMin != null || catalogState.precoMax != null || catalogState.orderBy !== 'recentes';
+    document.getElementById('filterClearBtn').hidden = !ativos;
+  }
+
+  document.getElementById('filterMarca').addEventListener('change', e => {
+    catalogState.marcaId = e.target.value;
+    updateFilterClearVisibility();
+    loadCatalogPage(true);
+  });
+
+  document.getElementById('filterOrdenar').addEventListener('change', e => {
+    catalogState.orderBy = e.target.value;
+    updateFilterClearVisibility();
+    loadCatalogPage(true);
+  });
+
+  let precoDebounceTimer = null;
+  function onPrecoInputChange() {
+    clearTimeout(precoDebounceTimer);
+    precoDebounceTimer = setTimeout(() => {
+      const min = document.getElementById('filterPrecoMin').value;
+      const max = document.getElementById('filterPrecoMax').value;
+      catalogState.precoMin = min !== '' ? Number(min) : null;
+      catalogState.precoMax = max !== '' ? Number(max) : null;
+      updateFilterClearVisibility();
+      loadCatalogPage(true);
+    }, 400);
+  }
+  document.getElementById('filterPrecoMin').addEventListener('input', onPrecoInputChange);
+  document.getElementById('filterPrecoMax').addEventListener('input', onPrecoInputChange);
+
+  document.getElementById('filterClearBtn').addEventListener('click', () => {
+    catalogState.marcaId = '';
+    catalogState.precoMin = null;
+    catalogState.precoMax = null;
+    catalogState.orderBy = 'recentes';
+    document.getElementById('filterMarca').value = '';
+    document.getElementById('filterPrecoMin').value = '';
+    document.getElementById('filterPrecoMax').value = '';
+    document.getElementById('filterOrdenar').value = 'recentes';
+    updateFilterClearVisibility();
+    loadCatalogPage(true);
+  });
+
   document.getElementById('loadMoreBtn').addEventListener('click', () => loadCatalogPage(false));
 
   /* ── MODAL DE DETALHES (acessível: foco preso, ESC fecha, foco retorna ao gatilho) ── */
@@ -195,6 +267,10 @@
   function openModal(id, triggerEl) {
     const v = catalogState.rows.find(x => x.id === id);
     if (!v) return;
+    openModalForVehicle(v, triggerEl);
+  }
+
+  function openModalForVehicle(v, triggerEl) {
     lastFocusedEl = triggerEl || document.activeElement;
     modalVehicle = v;
 
@@ -227,6 +303,22 @@
     document.body.style.overflow = 'hidden';
     document.getElementById('modalCloseBtn').focus();
     document.addEventListener('keydown', onModalKeydown);
+
+    // Deixa a URL compartilhável — copiar o link da barra de endereço (ou
+    // mandar no WhatsApp) leva direto a este veículo.
+    history.replaceState(null, '', '?veiculo=' + encodeURIComponent(v.id));
+  }
+
+  /** Abre direto o veículo indicado em ?veiculo=<id> na URL, se houver — busca fora da página atual se necessário. */
+  async function openDeepLinkedVehicle() {
+    const id = new URLSearchParams(location.search).get('veiculo');
+    if (!id) return;
+    let v = catalogState.rows.find(x => x.id === id);
+    if (!v) {
+      try { v = await HM.getVehicleById(id); }
+      catch (err) { console.error('[site] Falha ao carregar veículo do link compartilhado.', err); }
+    }
+    if (v) openModalForVehicle(v, null);
   }
 
   function renderModalImage(url, v) {
@@ -252,6 +344,7 @@
     document.body.style.overflow = '';
     document.removeEventListener('keydown', onModalKeydown);
     if (lastFocusedEl) lastFocusedEl.focus();
+    history.replaceState(null, '', location.pathname);
   }
 
   function onModalKeydown(e) {
@@ -311,6 +404,8 @@
     }
     applyConfig();
     renderHero();
-    loadCatalogPage(true);
+    populateMarcaFilter();
+    await loadCatalogPage(true);
+    await openDeepLinkedVehicle();
   })();
 })();
