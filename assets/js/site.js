@@ -30,6 +30,67 @@
     return SUPABASE_URL + '/functions/v1/vehicle-preview/' + encodeURIComponent(id);
   }
 
+  /* ── SIMULADOR DE PARCELAMENTO ── */
+  // Tabela Price (juros compostos) — a mesma conta usada por bancos/financeiras
+  // para calcular a parcela de um valor financiado. Simulação aproximada, não
+  // é uma oferta de crédito real (parâmetros vêm de Configurações no painel).
+  function calcularParcela(valorFinanciado, jurosMensalPercent, numParcelas) {
+    const i = jurosMensalPercent / 100;
+    if (valorFinanciado <= 0 || numParcelas <= 0) return 0;
+    if (i <= 0) return valorFinanciado / numParcelas;
+    const fator = Math.pow(1 + i, numParcelas);
+    return valorFinanciado * (i * fator) / (fator - 1);
+  }
+
+  /** "48x de R$ 2.850,00", usando a entrada padrão e o máximo de parcelas configurados — a menor parcela possível, pra teaser no card. */
+  function menorParcelaTexto(precoNumerico) {
+    const entrada = precoNumerico * (cfg.parcelamentoEntrada / 100);
+    const financiado = precoNumerico - entrada;
+    const parcela = calcularParcela(financiado, cfg.parcelamentoJuros, cfg.parcelamentoMaxParcelas);
+    return `ou ${cfg.parcelamentoMaxParcelas}x de ${HM.formatPrice(parcela)}`;
+  }
+
+  const PARCELA_OPCOES = [12, 18, 24, 36, 48, 60, 72, 84, 96, 108, 120];
+
+  /** Prepara o simulador do modal para o veículo aberto — entrada e nº de parcelas partem dos padrões configurados, e o visitante pode ajustar. */
+  function setupInstallmentSimulator(v) {
+    const wrap = document.getElementById('modalInstallment');
+    const ativo = cfg.parcelamentoAtivo && v.precoNumerico > 0;
+    wrap.hidden = !ativo;
+    if (!ativo) return;
+
+    document.getElementById('modalInstallmentBody').hidden = true;
+    document.getElementById('modalInstallmentToggle').setAttribute('aria-expanded', 'false');
+
+    document.getElementById('modalEntrada').value = Math.round(v.precoNumerico * (cfg.parcelamentoEntrada / 100));
+
+    const opcoes = PARCELA_OPCOES.filter(n => n <= cfg.parcelamentoMaxParcelas);
+    if (!opcoes.includes(cfg.parcelamentoMaxParcelas)) opcoes.push(cfg.parcelamentoMaxParcelas);
+    const parcelasSelect = document.getElementById('modalParcelas');
+    parcelasSelect.innerHTML = opcoes.map(n => `<option value="${n}">${n}x</option>`).join('');
+    parcelasSelect.value = String(cfg.parcelamentoMaxParcelas);
+
+    updateInstallmentResult();
+  }
+
+  function updateInstallmentResult() {
+    if (!modalVehicle) return;
+    const entrada = Math.max(0, Number(document.getElementById('modalEntrada').value) || 0);
+    const parcelas = Number(document.getElementById('modalParcelas').value) || 1;
+    const financiado = Math.max(0, modalVehicle.precoNumerico - entrada);
+    const parcela = calcularParcela(financiado, cfg.parcelamentoJuros, parcelas);
+    document.getElementById('modalInstallmentResult').textContent = `${parcelas}x de ${HM.formatPrice(parcela)}`;
+  }
+
+  document.getElementById('modalInstallmentToggle').addEventListener('click', () => {
+    const body = document.getElementById('modalInstallmentBody');
+    const abrir = body.hidden;
+    body.hidden = !abrir;
+    document.getElementById('modalInstallmentToggle').setAttribute('aria-expanded', String(abrir));
+  });
+  document.getElementById('modalEntrada').addEventListener('input', updateInstallmentResult);
+  document.getElementById('modalParcelas').addEventListener('change', updateInstallmentResult);
+
   /* ── Aplica as configurações da loja em todos os pontos do site ── */
   function applyConfig() {
     const wppHref = HM.wppLink('Olá! Vim pelo site e gostaria de saber mais sobre os veículos da Holanda Motors.', cfg.wpp);
@@ -170,6 +231,7 @@
           <li class="vehicle-spec">${escapeHtml(v.cambio)}</li>
         </ul>
         <p class="vehicle-price">${escapeHtml(v.price)}</p>
+        ${cfg.parcelamentoAtivo && v.precoNumerico > 0 ? `<p class="vehicle-installment">${escapeHtml(menorParcelaTexto(v.precoNumerico))}</p>` : ''}
         <div class="vehicle-actions">
           <button class="v-btn-detail" data-detail="${v.id}">Ver detalhes</button>
           <a href="${HM.wppLink(wppMsg, cfg.wpp)}" target="_blank" class="v-btn-wpp">
@@ -293,6 +355,7 @@
     const temVariasFotos = modalPhotos.length > 1;
     document.getElementById('modalPrevBtn').hidden = !temVariasFotos;
     document.getElementById('modalNextBtn').hidden = !temVariasFotos;
+    document.getElementById('modalZoomBtn').hidden = modalPhotos.length === 0;
 
     document.getElementById('modalMake').textContent = v.make;
     document.getElementById('modalModel').textContent = v.model;
@@ -305,6 +368,7 @@
       <li class="modal-spec"><label>Tipo</label><span>${v.tipo === 'carro' ? 'Carro' : 'Moto'}</span></li>
     `;
     document.getElementById('modalPrice').textContent = v.price;
+    setupInstallmentSimulator(v);
     document.getElementById('modalDesc').textContent = v.desc || '';
     document.getElementById('modalDesc').style.display = v.desc ? 'block' : 'none';
     document.getElementById('modalWpp').href = HM.wppLink(wppMsg, cfg.wpp);
@@ -337,9 +401,10 @@
     document.getElementById('modalImg').innerHTML = url
       ? `<img src="${escapeHtml(url)}" alt="${escapeHtml(v.make + ' ' + v.model)}" style="width:100%;height:300px;object-fit:contain;display:block;">`
       : '';
+    updateLightboxImage();
   }
 
-  /** Troca a foto exibida no modal (setas ‹ › ou teclado) — o índice dá a volta nas pontas. */
+  /** Troca a foto exibida no modal (setas ‹ › ou teclado) — o índice dá a volta nas pontas. Também usada pelo lightbox, que reaproveita o mesmo estado. */
   function showModalPhoto(delta) {
     if (modalPhotos.length < 2) return;
     modalPhotoIndex = (modalPhotoIndex + delta + modalPhotos.length) % modalPhotos.length;
@@ -348,6 +413,66 @@
 
   document.getElementById('modalPrevBtn').addEventListener('click', () => showModalPhoto(-1));
   document.getElementById('modalNextBtn').addEventListener('click', () => showModalPhoto(1));
+
+  /* ── LIGHTBOX (foto em tela cheia) — reaproveita modalPhotos/modalPhotoIndex ── */
+  function updateLightboxImage() {
+    const img = document.getElementById('lightboxImg');
+    const foto = modalPhotos[modalPhotoIndex];
+    if (!foto) return;
+    img.src = foto.url;
+    img.alt = modalVehicle ? `${modalVehicle.make} ${modalVehicle.model}` : '';
+  }
+
+  function openLightbox() {
+    if (!modalPhotos.length) return;
+    const temVarias = modalPhotos.length > 1;
+    document.getElementById('lightboxPrevBtn').hidden = !temVarias;
+    document.getElementById('lightboxNextBtn').hidden = !temVarias;
+    updateLightboxImage();
+
+    const overlay = document.getElementById('lightboxOverlay');
+    overlay.hidden = false;
+    overlay.classList.add('open');
+    document.getElementById('lightboxCloseBtn').focus();
+
+    // Enquanto o lightbox está por cima, ele passa a responder por
+    // ESC/setas — o modal de detalhes por baixo fica "pausado" pra não
+    // fechar junto (senão um ESC fecharia os dois de uma vez).
+    document.removeEventListener('keydown', onModalKeydown);
+    document.addEventListener('keydown', onLightboxKeydown);
+  }
+
+  function closeLightbox() {
+    const overlay = document.getElementById('lightboxOverlay');
+    overlay.classList.remove('open');
+    overlay.hidden = true;
+    document.removeEventListener('keydown', onLightboxKeydown);
+    document.addEventListener('keydown', onModalKeydown);
+    document.getElementById('modalZoomBtn').focus();
+  }
+
+  function onLightboxKeydown(e) {
+    if (e.key === 'Escape') { closeLightbox(); return; }
+    if (e.key === 'ArrowLeft') { showModalPhoto(-1); return; }
+    if (e.key === 'ArrowRight') { showModalPhoto(1); return; }
+    if (e.key !== 'Tab') return;
+    const overlay = document.getElementById('lightboxOverlay');
+    const focusables = overlay.querySelectorAll('button:not([disabled])');
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+
+  document.getElementById('modalZoomBtn').addEventListener('click', openLightbox);
+  document.getElementById('modalImg').addEventListener('click', openLightbox);
+  document.getElementById('lightboxCloseBtn').addEventListener('click', closeLightbox);
+  document.getElementById('lightboxOverlay').addEventListener('click', e => {
+    if (e.target === e.currentTarget) closeLightbox();
+  });
+  document.getElementById('lightboxPrevBtn').addEventListener('click', () => showModalPhoto(-1));
+  document.getElementById('lightboxNextBtn').addEventListener('click', () => showModalPhoto(1));
 
   function closeModal() {
     const overlay = document.getElementById('modalOverlay');

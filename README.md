@@ -160,7 +160,9 @@ Fonte única de verdade. Expõe um objeto global `HM` com funções como `HM.get
 
 ### `index.html` (site público) + `assets/js/site.js`
 
-Ao carregar, busca a configuração da loja e o veículo em destaque (uma única consulta leve, não o catálogo inteiro) para montar o hero. O catálogo é paginado: carrega a primeira leva de veículos ativos e mostra "Carregar mais veículos" no final da grade; trocar o filtro (Carros/Motos/Consignados) refaz a busca no servidor em vez de filtrar uma lista já baixada. O modal de detalhes mostra todas as fotos do veículo (não só a capa), navegáveis por setas ‹ › sobre a imagem (clique ou teclado) quando há mais de uma. Abrir um veículo atualiza a URL para `?veiculo=<id>` — o link da barra de endereço pode ser copiado e reaberto direto naquele veículo.
+Ao carregar, busca a configuração da loja e o veículo em destaque (uma única consulta leve, não o catálogo inteiro) para montar o hero. O catálogo é paginado: carrega a primeira leva de veículos ativos e mostra "Carregar mais veículos" no final da grade; trocar o filtro (Carros/Motos/Consignados), marca, faixa de preço ou ordenação refaz a busca no servidor em vez de filtrar uma lista já baixada. O modal de detalhes mostra todas as fotos do veículo (não só a capa), navegáveis por setas ‹ › sobre a imagem (clique ou teclado) quando há mais de uma, com um botão de lupa que abre a foto atual em tela cheia (mesma navegação por setas, ESC fecha só a foto ampliada). Abrir um veículo atualiza a URL para `?veiculo=<id>` — o link da barra de endereço pode ser copiado e reaberto direto naquele veículo.
+
+Cada card e o modal também mostram uma simulação de parcelamento ("a partir de Nx de R$...") calculada no navegador (tabela Price/juros compostos) a partir da taxa, entrada padrão e nº máximo de parcelas configurados em Configurações → Simulador de parcelamento — deixa claro que é uma estimativa, não uma oferta de crédito real. Pode ser desligado inteiramente por lá.
 
 ### `admin.html` (painel do gestor) + `assets/js/admin.js`
 

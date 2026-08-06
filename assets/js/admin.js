@@ -653,6 +653,10 @@
     document.getElementById('cfg-consig').checked = !!cfg.consig;
     document.getElementById('cfg-floatwpp').checked = !!cfg.floatwpp;
     document.getElementById('cfg-nophoto').checked = !!cfg.nophoto;
+    document.getElementById('cfg-parcelamento-ativo').checked = !!cfg.parcelamentoAtivo;
+    document.getElementById('cfg-parcelamento-juros').value = cfg.parcelamentoJuros;
+    document.getElementById('cfg-parcelamento-entrada').value = cfg.parcelamentoEntrada;
+    document.getElementById('cfg-parcelamento-max').value = cfg.parcelamentoMaxParcelas;
   }
   document.getElementById('saveConfigBtn').addEventListener('click', async () => {
     const cfg = {
@@ -667,7 +671,19 @@
       consig: document.getElementById('cfg-consig').checked,
       floatwpp: document.getElementById('cfg-floatwpp').checked,
       nophoto: document.getElementById('cfg-nophoto').checked,
+      parcelamentoAtivo: document.getElementById('cfg-parcelamento-ativo').checked,
+      parcelamentoJuros: Number(document.getElementById('cfg-parcelamento-juros').value) || 0,
+      parcelamentoEntrada: Number(document.getElementById('cfg-parcelamento-entrada').value) || 0,
+      parcelamentoMaxParcelas: Math.round(Number(document.getElementById('cfg-parcelamento-max').value)) || 1,
     };
+    if (cfg.parcelamentoEntrada < 0 || cfg.parcelamentoEntrada > 100) {
+      toast('A entrada padrão do simulador precisa ficar entre 0 e 100%.', 'error');
+      return;
+    }
+    if (cfg.parcelamentoMaxParcelas < 1 || cfg.parcelamentoMaxParcelas > 120) {
+      toast('O máximo de parcelas do simulador precisa ficar entre 1 e 120.', 'error');
+      return;
+    }
     try {
       await HM.saveConfig(cfg);
       toast('Configurações salvas com sucesso! Recarregue o site público para ver as mudanças.', 'success');

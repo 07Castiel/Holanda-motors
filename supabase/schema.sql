@@ -520,3 +520,30 @@ alter table consignacoes add column if not exists legacy_id text;
 
 create unique index if not exists idx_veiculos_legacy_id on veiculos (legacy_id) where legacy_id is not null;
 create unique index if not exists idx_consignacoes_legacy_id on consignacoes (legacy_id) where legacy_id is not null;
+
+-- ============================================================================
+-- PARTE 4 — Simulador de parcelamento
+-- ----------------------------------------------------------------------------
+-- Parâmetros ficam em configuracoes_loja (editáveis em Configurações no
+-- painel) em vez de fixos no código — a loja ajusta taxa/entrada/parcelas
+-- máximas sem precisar de uma alteração de código. O cálculo em si (juros
+-- compostos, tabela Price) é feito no navegador, ver assets/js/site.js.
+-- ============================================================================
+
+alter table configuracoes_loja add column if not exists parcelamento_ativo boolean not null default true;
+alter table configuracoes_loja add column if not exists parcelamento_juros_mensal numeric(5, 2) not null default 1.99;
+alter table configuracoes_loja add column if not exists parcelamento_entrada_padrao numeric(5, 2) not null default 20;
+alter table configuracoes_loja add column if not exists parcelamento_max_parcelas integer not null default 48;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'config_juros_valido') then
+    alter table configuracoes_loja add constraint config_juros_valido check (parcelamento_juros_mensal >= 0);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'config_entrada_valida') then
+    alter table configuracoes_loja add constraint config_entrada_valida check (parcelamento_entrada_padrao >= 0 and parcelamento_entrada_padrao <= 100);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'config_parcelas_valido') then
+    alter table configuracoes_loja add constraint config_parcelas_valido check (parcelamento_max_parcelas > 0 and parcelamento_max_parcelas <= 120);
+  end if;
+end $$;

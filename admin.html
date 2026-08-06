@@ -295,6 +295,17 @@
               </div>
             </div>
             <div class="config-section" style="margin-top:20px">
+              <h2>Simulador de parcelamento</h2>
+              <div class="toggle-row">
+                <div class="toggle-info"><h3 id="lbl-parcelamento">Mostrar simulador no site</h3><p>Exibe "a partir de Nx" nos cards e o simulador no modal de detalhes</p></div>
+                <label class="toggle"><input type="checkbox" id="cfg-parcelamento-ativo" aria-labelledby="lbl-parcelamento"><span class="toggle-slider"></span></label>
+              </div>
+              <div class="config-field"><label for="cfg-parcelamento-juros">Juros ao mês (%)</label><input type="number" id="cfg-parcelamento-juros" min="0" step="0.01" placeholder="1.99"></div>
+              <div class="config-field"><label for="cfg-parcelamento-entrada">Entrada padrão (% do preço)</label><input type="number" id="cfg-parcelamento-entrada" min="0" max="100" step="1" placeholder="20"></div>
+              <div class="config-field"><label for="cfg-parcelamento-max">Máximo de parcelas</label><input type="number" id="cfg-parcelamento-max" min="1" max="120" step="1" placeholder="48"></div>
+              <p class="page-hint">Só uma simulação aproximada, sem consulta de crédito — o cálculo é feito no navegador do visitante e não representa uma oferta de financiamento real.</p>
+            </div>
+            <div class="config-section" style="margin-top:20px">
               <h2>Segurança</h2>
               <div class="config-field"><label for="cfg-pass">Nova senha</label><input type="password" id="cfg-pass" placeholder="Deixe em branco para não alterar" autocomplete="new-password"></div>
               <div class="config-field"><label for="cfg-pass2">Confirmar senha</label><input type="password" id="cfg-pass2" placeholder="Repita a nova senha" autocomplete="new-password"></div>

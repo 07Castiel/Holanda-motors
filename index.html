@@ -273,12 +273,30 @@
       <div class="modal-img" id="modalImg" role="img"></div>
       <button type="button" class="modal-nav prev" id="modalPrevBtn" aria-label="Foto anterior" hidden>‹</button>
       <button type="button" class="modal-nav next" id="modalNextBtn" aria-label="Próxima foto" hidden>›</button>
+      <button type="button" class="modal-zoom" id="modalZoomBtn" aria-label="Ampliar foto" hidden>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+      </button>
     </div>
     <div class="modal-body">
       <p class="modal-make" id="modalMake"></p>
       <h2 class="modal-model" id="modalModel"></h2>
       <ul class="modal-specs" id="modalSpecs"></ul>
       <p class="modal-price" id="modalPrice"></p>
+      <div class="modal-installment" id="modalInstallment" hidden>
+        <button type="button" class="modal-installment-toggle" id="modalInstallmentToggle" aria-expanded="false" aria-controls="modalInstallmentBody">Simular parcelamento</button>
+        <div class="modal-installment-body" id="modalInstallmentBody" hidden>
+          <div class="modal-installment-row">
+            <label for="modalEntrada">Entrada (R$)</label>
+            <input type="number" id="modalEntrada" min="0" step="500" inputmode="numeric">
+          </div>
+          <div class="modal-installment-row">
+            <label for="modalParcelas">Nº de parcelas</label>
+            <select id="modalParcelas"></select>
+          </div>
+          <p class="modal-installment-result" id="modalInstallmentResult"></p>
+          <p class="modal-installment-disclaimer">Simulação aproximada, sem consulta de crédito — não representa uma oferta de financiamento. Confirme as condições reais na loja.</p>
+        </div>
+      </div>
       <p class="modal-desc" id="modalDesc"></p>
       <div class="modal-actions">
         <a id="modalWpp" href="#" target="_blank" class="btn-primary" style="flex:1; justify-content:center;">
@@ -289,6 +307,14 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- LIGHTBOX: FOTO AMPLIADA -->
+<div class="lightbox-overlay" id="lightboxOverlay" role="dialog" aria-modal="true" aria-label="Foto ampliada do veículo" hidden>
+  <button type="button" class="lightbox-close" id="lightboxCloseBtn" aria-label="Fechar foto ampliada">✕</button>
+  <button type="button" class="modal-nav prev" id="lightboxPrevBtn" aria-label="Foto anterior" hidden>‹</button>
+  <img class="lightbox-img" id="lightboxImg" alt="">
+  <button type="button" class="modal-nav next" id="lightboxNextBtn" aria-label="Próxima foto" hidden>›</button>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>

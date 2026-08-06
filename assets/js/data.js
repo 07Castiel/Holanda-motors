@@ -87,6 +87,7 @@ const HM = (function () {
       year: row.ano,
       km: row.km,
       price: formatPrice(row.preco),
+      precoNumerico: Number(row.preco) || 0,
       cambio: row.cambio || '',
       combustivel: row.combustivel || '',
       cor: row.cor || '',
@@ -152,6 +153,10 @@ const HM = (function () {
       consig: row.mostrar_consignacao,
       floatwpp: row.botao_whatsapp_flutuante,
       nophoto: row.ocultar_sem_foto,
+      parcelamentoAtivo: row.parcelamento_ativo,
+      parcelamentoJuros: Number(row.parcelamento_juros_mensal),
+      parcelamentoEntrada: Number(row.parcelamento_entrada_padrao),
+      parcelamentoMaxParcelas: row.parcelamento_max_parcelas,
     };
   }
 
@@ -539,6 +544,10 @@ const HM = (function () {
       mostrar_consignacao: cfg.consig,
       botao_whatsapp_flutuante: cfg.floatwpp,
       ocultar_sem_foto: cfg.nophoto,
+      parcelamento_ativo: cfg.parcelamentoAtivo,
+      parcelamento_juros_mensal: cfg.parcelamentoJuros,
+      parcelamento_entrada_padrao: cfg.parcelamentoEntrada,
+      parcelamento_max_parcelas: cfg.parcelamentoMaxParcelas,
       updated_at: new Date().toISOString(),
     }).eq('id', 1));
     await logAction('config', 'config', null, { resumo: 'atualizou as configurações da loja' });
