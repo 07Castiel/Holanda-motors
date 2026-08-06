@@ -43,6 +43,7 @@ O painel também traz: upload de várias fotos por veículo (com compactação a
 - **CSS3** puro (sem frameworks) — variáveis nativas, Grid e Flexbox
 - **JavaScript** vanilla (ES6+, assíncrono), sem bundler — o SDK do Supabase é carregado via CDN
 - **[Supabase](https://supabase.com)**: Postgres (banco), Auth (login do painel) e Storage (fotos dos veículos)
+- **[Chart.js](https://www.chartjs.org)** via CDN — só carregado em `/admin/`, usado nos gráficos do Dashboard Financeiro
 - **Google Fonts** (Barlow / Barlow Condensed)
 
 Não há etapa de build, bundler ou transpilação — os arquivos rodam exatamente como estão, direto no navegador. Isso é intencional para manter a compatibilidade com o GitHub Pages.
@@ -90,6 +91,10 @@ Tabelas criadas por `supabase/schema.sql`:
 | `logs_acoes` | Trilha de auditoria — toda ação de escrita do painel gera uma linha aqui (quem, o quê, quando). É a fonte tanto do feed "Atividade recente" do dashboard quanto do histórico por veículo e da tela de Logs. Somente leitura depois de gravada (sem política de update/delete). |
 | `usuarios` | Perfil de cada administrador (nome, e-mail, **nível de acesso**), vinculada 1:1 ao usuário do Supabase Auth. A senha em si nunca fica nesta tabela. Preenchida automaticamente por um gatilho quando um usuário é criado no Auth — veja [Níveis de acesso](#níveis-de-acesso). |
 | `interacoes_veiculo` | Um evento por "visualização" (abriu o modal de detalhes) ou clique em WhatsApp — alimenta a coluna "Interesse" na tabela de veículos e o "Mais vistos" do dashboard. **Único caso de tabela com INSERT público** no projeto (o site é anônimo); a leitura continua restrita a quem está autenticado, então nenhum visitante vê os números de ninguém. Sem limitação de taxa — ver [Limitações conhecidas](#limitações-conhecidas). |
+| `emails_permitidos` | E-mails autorizados a concluir login social (Google) — ver [Como adicionar novos administradores](#como-adicionar-novos-administradores). Só administrador lê/escreve. |
+| `lancamentos_financeiros` | Ledger único do Financeiro (entradas e saídas) — ver [Módulo Financeiro](#módulo-financeiro). Restrito a gerente/administrador. |
+| `categorias_financeiras` | Categorias e subcategorias (entrada/saída) usadas pelos lançamentos financeiros. |
+| `clientes` / `fornecedores` | Cadastro leve (nome, CPF/CNPJ, telefone) referenciado opcionalmente pelos lançamentos — preparado para Contas a Receber/Pagar (fase futura). |
 
 A tabela `atividades` da primeira versão da migração ainda existe no banco (por compatibilidade, nada foi apagado), mas não é mais usada — foi substituída por `logs_acoes`, que registra a mesma informação de forma estruturada e com autoria.
 
@@ -175,9 +180,50 @@ Cada card e o modal também mostram uma simulação de parcelamento ("a partir d
 2. **Dashboard** — métricas de total cadastrado, vendidos, destaques e consignações (contagens feitas no servidor, sem baixar o estoque inteiro) + atividade recente + "Mais vistos" (top 5 veículos por visualização no site público).
 3. **Veículos (CRUD)** — criar, editar, ocultar/exibir, marcar como vendido e excluir. Lista paginada com busca instantânea por marca/modelo/placa, com uma coluna "Interesse" mostrando visualizações e cliques em WhatsApp de cada veículo. Upload de várias fotos por veículo (arrastar e soltar, ou selecionar múltiplos arquivos), cada uma compactada automaticamente antes do envio ao Storage; qualquer uma pode virar a "capa" do anúncio. Cada veículo tem um histórico de alterações (quem editou o quê e quando).
 4. **Consignações** — registro de veículos consignados por terceiros, também paginado.
-5. **Usuários** — visível para administradores: lista quem tem acesso ao painel e permite alterar o nível de cada um.
-6. **Logs** — visível para gerentes/administradores: trilha completa de ações no painel, com filtro por área.
-7. **Configurações** — dados da loja, preferências de exibição do site, troca de senha, e a seção de backup/restauração (ver [Backup e restauração](#backup-e-restauração)) — essas duas últimas exigem nível gerente ou administrador.
+5. **Financeiro** — visível só para gerentes/administradores (vendedor não vê o menu). Ver [Módulo Financeiro](#módulo-financeiro) abaixo.
+6. **Usuários** — visível para administradores: lista quem tem acesso ao painel e permite alterar o nível de cada um.
+7. **Logs** — visível para gerentes/administradores: trilha completa de ações no painel, com filtro por área.
+8. **Configurações** — dados da loja, preferências de exibição do site, troca de senha, e a seção de backup/restauração (ver [Backup e restauração](#backup-e-restauração)) — essas duas últimas exigem nível gerente ou administrador.
+
+## Módulo Financeiro
+
+Fase 1 do setor financeiro — fundação de banco completa mais as duas telas
+mais centrais (Dashboard e Fluxo de Caixa). Contas a Receber/Pagar,
+Despesas, Receitas, Comissões, Relatórios (com exportação) e Backup
+Financeiro dedicado ainda não existem — ficam para as próximas fases.
+
+- **Ledger único** (`lancamentos_financeiros`): entradas e saídas, com
+  categoria/subcategoria, forma de pagamento, status (pago/pendente/
+  cancelado — "vencido" é calculado na consulta, não guardado), origem,
+  vínculo opcional com veículo/consignação/cliente/fornecedor, número de
+  documento e observações. Baixa parcial ou total via
+  `registrar_pagamento` (RPC atômica no banco — duas baixas simultâneas no
+  mesmo lançamento nunca se perdem) e "reabrir cobrança" para desfazer uma
+  baixa feita por engano.
+- **Restrito a gerente/administrador** — `vendedor` não enxerga nenhuma
+  página do Financeiro nem consegue consultar a API diretamente (RLS).
+  Exclusão de lançamento exige `administrador`.
+- **Auditoria automática** — um trigger no banco grava em `logs_acoes`
+  toda vez que um lançamento é criado, editado ou excluído, com o valor
+  anterior e o novo — não depende do código do navegador lembrar de
+  registrar.
+- **Concorrência** — edição de um lançamento usa o mesmo padrão de
+  `updated_at` do resto do sistema: se dois gestores editarem o mesmo
+  lançamento ao mesmo tempo, o segundo salvamento é bloqueado com aviso em
+  vez de sobrescrever silenciosamente.
+- **Dashboard Financeiro** — 8 indicadores (saldo atual, entradas/saídas
+  do mês, lucro líquido, contas vencidas/a vencer, recebimentos/pagamentos
+  do dia) e 4 gráficos (fluxo de caixa dos últimos 6 meses, receita x
+  despesa do mês, receitas e despesas por categoria), todos calculados no
+  banco numa única chamada — o navegador não baixa os lançamentos um a um
+  para somar.
+- **Limitação conhecida:** "Recebimentos/pagamentos do dia" no dashboard
+  são aproximados pela data da última baixa de cada lançamento — se um
+  lançamento recebeu mais de uma baixa parcial no mesmo dia, só a última
+  fica registrada nesse campo. Uma fase futura deve adicionar uma tabela
+  de histórico de pagamentos (um evento por baixa) para isso ficar exato,
+  a mesma tabela que também vai alimentar o "Histórico completo" de Contas
+  a Receber/Pagar.
 
 ## Preview ao compartilhar (Edge Function)
 

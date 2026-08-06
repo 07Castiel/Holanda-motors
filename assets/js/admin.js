@@ -23,6 +23,8 @@
   const ICON_EDIT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
   const ICON_DEL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6m4-6v6"/><path d="M9 6V4h6v2"/></svg>';
   const ICON_TAG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20.59 13.41L11 3.83A2 2 0 009.59 3.24L4 3a1 1 0 00-1 1l.24 5.59a2 2 0 00.59 1.41l9.58 9.58a2 2 0 002.83 0l4.35-4.35a2 2 0 000-2.82z"/><circle cx="8" cy="8" r="1.5"/></svg>';
+  const ICON_CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+  const ICON_UNDO = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 00-15-6.7L3 13"/></svg>';
   const ICON_EYE_SMALL = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="vertical-align:-2px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
   const ICON_WPP_SMALL = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>';
 
@@ -157,7 +159,7 @@
   }
 
   /* ── NAVEGAÇÃO ── */
-  const titles = { dashboard: 'Dashboard', veiculos: 'Veículos', consignacoes: 'Consignações', usuarios: 'Usuários', logs: 'Logs', configuracoes: 'Configurações' };
+  const titles = { dashboard: 'Dashboard', veiculos: 'Veículos', consignacoes: 'Consignações', 'fin-dashboard': 'Dashboard Financeiro', 'fin-fluxo': 'Fluxo de Caixa', usuarios: 'Usuários', logs: 'Logs', configuracoes: 'Configurações' };
   document.querySelectorAll('.nav-item[data-page]').forEach(btn => {
     btn.addEventListener('click', () => navigate(btn.dataset.page, btn));
   });
@@ -171,6 +173,8 @@
     document.getElementById('mainContent').focus?.();
     if (page === 'usuarios') { renderUsersTable(); renderAllowedEmailsTable(); }
     if (page === 'logs') loadLogsPage(true);
+    if (page === 'fin-dashboard') renderDashboardFinanceiro();
+    if (page === 'fin-fluxo') { if (!finCategoriasCarregadas) populateFinCategoriaFilters(); loadLancamentosPage(true); }
   }
 
   const sidebar = document.getElementById('sidebar');
@@ -668,6 +672,382 @@
     }
   }
 
+  /* ══════════════════════════════════════════════════════════════════════
+   * FINANCEIRO — Dashboard e Fluxo de Caixa
+   * ════════════════════════════════════════════════════════════════════ */
+
+  const FIN_FORMA_LABELS = { pix: 'PIX', dinheiro: 'Dinheiro', cartao_debito: 'Cartão débito', cartao_credito: 'Cartão crédito', transferencia: 'Transferência', financiamento: 'Financiamento', cheque: 'Cheque' };
+  const MESES_ABREV = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  function formatMesLabel(isoMes) {
+    const [ano, mes] = isoMes.split('-');
+    return `${MESES_ABREV[Number(mes) - 1]}/${ano.slice(2)}`;
+  }
+
+  /* ── Dashboard Financeiro ── */
+  let finCharts = {};
+  function destroyFinChart(key) {
+    if (finCharts[key]) { finCharts[key].destroy(); delete finCharts[key]; }
+  }
+  function finChartOptions() {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { ticks: { color: '#888', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,.06)' } },
+        y: { ticks: { color: '#888', font: { size: 11 } }, grid: { color: 'rgba(255,255,255,.06)' }, beginAtZero: true },
+      },
+      plugins: { legend: { labels: { color: '#aaa', font: { size: 11 } } } },
+    };
+  }
+
+  async function renderDashboardFinanceiro() {
+    const statsEl = document.getElementById('finDashStats');
+    try {
+      const d = await HM.getDashboardFinanceiro();
+      const lucro = d.entradasMes - d.saidasMes;
+      const cards = [
+        { label: 'Saldo atual', val: HM.formatPrice(d.saldoAtual), cls: d.saldoAtual >= 0 ? 'green' : 'red-c' },
+        { label: 'Entradas do mês', val: HM.formatPrice(d.entradasMes), cls: 'green' },
+        { label: 'Saídas do mês', val: HM.formatPrice(d.saidasMes), cls: 'red-c' },
+        { label: 'Lucro líquido (mês)', val: HM.formatPrice(lucro), cls: lucro >= 0 ? 'green' : 'red-c' },
+        { label: 'Contas vencidas', val: d.contasVencidas, sub: HM.formatPrice(d.contasVencidasValor), cls: d.contasVencidas ? 'red-c' : '' },
+        { label: 'Contas a vencer (7 dias)', val: d.contasAVencer, sub: HM.formatPrice(d.contasAVencerValor), cls: 'yellow' },
+        { label: 'Recebimentos de hoje', val: HM.formatPrice(d.recebimentosHoje), cls: 'blue' },
+        { label: 'Pagamentos de hoje', val: HM.formatPrice(d.pagamentosHoje), cls: 'blue' },
+      ];
+      statsEl.innerHTML = cards.map(c => `
+        <div class="stat-card ${c.cls}">
+          <div class="stat-card-label">${c.label}</div>
+          <div class="stat-card-val">${c.val}</div>
+          ${c.sub ? `<div class="stat-card-sub">${c.sub}</div>` : ''}
+        </div>
+      `).join('');
+
+      if (typeof Chart === 'undefined') return;
+
+      destroyFinChart('fluxo');
+      finCharts.fluxo = new Chart(document.getElementById('finChartFluxo'), {
+        type: 'bar',
+        data: {
+          labels: d.fluxoPorMes.map(m => formatMesLabel(m.mes)),
+          datasets: [
+            { label: 'Entradas', data: d.fluxoPorMes.map(m => m.entradas), backgroundColor: '#22C55E', borderRadius: 3 },
+            { label: 'Saídas', data: d.fluxoPorMes.map(m => m.saidas), backgroundColor: '#C8102E', borderRadius: 3 },
+          ],
+        },
+        options: finChartOptions(),
+      });
+
+      destroyFinChart('receitaDespesa');
+      finCharts.receitaDespesa = new Chart(document.getElementById('finChartReceitaDespesa'), {
+        type: 'doughnut',
+        data: { labels: ['Receita', 'Despesa'], datasets: [{ data: [d.entradasMes, d.saidasMes], backgroundColor: ['#22C55E', '#C8102E'] }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#aaa', font: { size: 11 } } } } },
+      });
+
+      destroyFinChart('receitas');
+      finCharts.receitas = new Chart(document.getElementById('finChartReceitas'), {
+        type: 'bar',
+        data: { labels: d.receitasPorCategoria.map(c => c.categoria), datasets: [{ label: 'Receitas', data: d.receitasPorCategoria.map(c => c.total), backgroundColor: '#3B82F6', borderRadius: 3 }] },
+        options: { ...finChartOptions(), indexAxis: 'y' },
+      });
+
+      destroyFinChart('despesas');
+      finCharts.despesas = new Chart(document.getElementById('finChartDespesas'), {
+        type: 'bar',
+        data: { labels: d.despesasPorCategoria.map(c => c.categoria), datasets: [{ label: 'Despesas', data: d.despesasPorCategoria.map(c => c.total), backgroundColor: '#C8102E', borderRadius: 3 }] },
+        options: { ...finChartOptions(), indexAxis: 'y' },
+      });
+    } catch (err) {
+      console.error('[admin] Falha ao carregar dashboard financeiro.', err);
+      statsEl.innerHTML = `<div class="stat-card"><div class="stat-card-label">Erro ao carregar</div><div class="stat-card-val">—</div></div>`;
+      toast('Não foi possível carregar o dashboard financeiro.', 'error');
+    }
+  }
+
+  /* ── Fluxo de Caixa (lista paginada de lançamentos) ── */
+  let lancamentoState = { page: 0, pageSize: 25, search: '', tipo: '', status: '', formaPagamento: '', categoriaId: '', dataInicio: '', dataFim: '', rows: [], total: 0 };
+  let lancamentoRequestToken = 0;
+  let finCategoriasCarregadas = false;
+  let finCategoriasEntrada = [];
+  let finCategoriasSaida = [];
+  let finSearchDebounceTimer;
+
+  async function populateFinCategoriaFilters() {
+    try {
+      const [entrada, saida] = await Promise.all([HM.getCategoriasFinanceiras('entrada'), HM.getCategoriasFinanceiras('saida')]);
+      finCategoriasEntrada = entrada;
+      finCategoriasSaida = saida;
+      finCategoriasCarregadas = true;
+      const raizes = [...entrada, ...saida].filter(c => !c.categoria_pai_id).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+      document.getElementById('finFilterCategoria').innerHTML = '<option value="">Todas as categorias</option>'
+        + raizes.map(c => `<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('');
+    } catch (err) {
+      console.error('[admin] Falha ao carregar categorias financeiras.', err);
+    }
+  }
+
+  document.getElementById('finSearch').addEventListener('input', e => {
+    clearTimeout(finSearchDebounceTimer);
+    const valor = e.target.value;
+    finSearchDebounceTimer = setTimeout(() => { lancamentoState.search = valor; loadLancamentosPage(true); }, 250);
+  });
+  document.getElementById('finFilterTipo').addEventListener('change', e => { lancamentoState.tipo = e.target.value; loadLancamentosPage(true); });
+  document.getElementById('finFilterStatus').addEventListener('change', e => { lancamentoState.status = e.target.value; loadLancamentosPage(true); });
+  document.getElementById('finFilterCategoria').addEventListener('change', e => { lancamentoState.categoriaId = e.target.value; loadLancamentosPage(true); });
+  document.getElementById('finFilterForma').addEventListener('change', e => { lancamentoState.formaPagamento = e.target.value; loadLancamentosPage(true); });
+  document.getElementById('finFilterInicio').addEventListener('change', e => { lancamentoState.dataInicio = e.target.value; loadLancamentosPage(true); });
+  document.getElementById('finFilterFim').addEventListener('change', e => { lancamentoState.dataFim = e.target.value; loadLancamentosPage(true); });
+  document.getElementById('lancamentoLoadMoreBtn').addEventListener('click', () => loadLancamentosPage(false));
+
+  async function loadLancamentosPage(reset) {
+    const requestToken = ++lancamentoRequestToken;
+    const pageToLoad = reset ? 0 : lancamentoState.page + 1;
+    const btn = document.getElementById('lancamentoLoadMoreBtn');
+    btn.disabled = true;
+    try {
+      const { rows, total } = await HM.getLancamentos({
+        page: pageToLoad, pageSize: lancamentoState.pageSize, search: lancamentoState.search,
+        tipo: lancamentoState.tipo, status: lancamentoState.status, formaPagamento: lancamentoState.formaPagamento,
+        categoriaId: lancamentoState.categoriaId, dataInicio: lancamentoState.dataInicio, dataFim: lancamentoState.dataFim,
+      });
+      if (requestToken !== lancamentoRequestToken) return;
+      lancamentoState.page = pageToLoad;
+      lancamentoState.rows = reset ? rows : lancamentoState.rows.concat(rows);
+      lancamentoState.total = total;
+      renderLancamentosTable();
+    } catch (err) {
+      if (requestToken !== lancamentoRequestToken) return;
+      console.error('[admin] Falha ao carregar lançamentos.', err);
+      toast('Não foi possível carregar o fluxo de caixa.', 'error');
+    } finally {
+      if (requestToken === lancamentoRequestToken) btn.disabled = false;
+    }
+  }
+
+  function lancamentoStatusBadge(l) {
+    if (l.status === 'cancelado') return `<span class="badge badge-inativo">Cancelado</span>`;
+    if (l.status === 'pago') return `<span class="badge badge-ativo">Pago</span>`;
+    if (l.vencida) return `<span class="badge badge-vencido">Vencido</span>`;
+    return `<span class="badge badge-negociando">Pendente</span>`;
+  }
+
+  function lancamentoRowHtml(l) {
+    const podeExcluir = roleAtLeast('administrador');
+    return `
+      <tr>
+        <td style="white-space:nowrap;font-size:12px;color:var(--gray)">${HM.formatDateBR(l.dataLancamento)}</td>
+        <td><div class="td-name">${escapeHtml(l.descricao)}</div>${l.formaPagamento ? `<div class="td-sub">${FIN_FORMA_LABELS[l.formaPagamento] || l.formaPagamento}</div>` : ''}</td>
+        <td style="font-size:12px;color:var(--gray)">${escapeHtml(l.categoriaNome || '—')}</td>
+        <td><span class="badge ${l.tipo === 'entrada' ? 'badge-ativo' : 'badge-vendido'}">${l.tipo === 'entrada' ? 'Entrada' : 'Saída'}</span></td>
+        <td class="${l.tipo === 'entrada' ? 'fin-valor-entrada' : 'fin-valor-saida'}" style="font-weight:700">${l.tipo === 'entrada' ? '+' : '−'} ${HM.formatPrice(l.valor)}</td>
+        <td>${lancamentoStatusBadge(l)}</td>
+        <td>
+          <div class="actions">
+            ${l.status === 'pendente' ? `<button class="btn-icon toggle" type="button" data-baixa="${l.id}" aria-label="Registrar pagamento de ${escapeHtml(l.descricao)}">${ICON_CHECK}</button>` : ''}
+            ${l.status === 'pago' ? `<button class="btn-icon" type="button" data-reabrir="${l.id}" data-label="${escapeHtml(l.descricao)}" aria-label="Reabrir cobrança de ${escapeHtml(l.descricao)}">${ICON_UNDO}</button>` : ''}
+            <button class="btn-icon edit" type="button" data-fin-edit="${l.id}" aria-label="Editar ${escapeHtml(l.descricao)}">${ICON_EDIT}</button>
+            ${podeExcluir ? `<button class="btn-icon del" type="button" data-fin-del="${l.id}" data-label="${escapeHtml(l.descricao)}" aria-label="Excluir ${escapeHtml(l.descricao)}">${ICON_DEL}</button>` : ''}
+          </div>
+        </td>
+      </tr>`;
+  }
+
+  function renderLancamentosTable() {
+    const ls = lancamentoState.rows;
+    const tbody = document.getElementById('lancamentoTableBody');
+    if (!ls.length) {
+      tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p>Nenhum lançamento encontrado.</p></div></td></tr>`;
+    } else {
+      tbody.innerHTML = ls.map(lancamentoRowHtml).join('');
+      tbody.querySelectorAll('[data-fin-edit]').forEach(b => b.addEventListener('click', () => openLancamentoModal(b.dataset.finEdit, b)));
+      tbody.querySelectorAll('[data-fin-del]').forEach(b => b.addEventListener('click', () => confirmDelete('lancamento', b.dataset.finDel, b.dataset.label, b)));
+      tbody.querySelectorAll('[data-baixa]').forEach(b => b.addEventListener('click', () => openBaixaModal(b.dataset.baixa, b)));
+      tbody.querySelectorAll('[data-reabrir]').forEach(b => b.addEventListener('click', () => reabrirLancamento(b.dataset.reabrir, b.dataset.label)));
+    }
+    document.getElementById('lancamentoListCount').textContent = ls.length ? `Mostrando ${ls.length} de ${lancamentoState.total}` : '';
+    document.getElementById('lancamentoLoadMoreBtn').hidden = ls.length >= lancamentoState.total;
+  }
+
+  async function reabrirLancamento(id, label) {
+    try {
+      await HM.reabrirLancamento(id);
+      await loadLancamentosPage(true);
+      toast(`Cobrança de "${label}" reaberta.`, 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao reabrir lançamento.', err);
+      toast('Não foi possível reabrir esta cobrança.', 'error');
+    }
+  }
+
+  /* ── Modal de lançamento (criar/editar) ── */
+  const lancamentoOverlay = document.getElementById('lancamentoModalOverlay');
+  let finTipoAtual = 'entrada';
+
+  document.getElementById('newLancamentoBtn').addEventListener('click', e => openLancamentoModal(null, e.currentTarget));
+  document.getElementById('lancamentoModalCloseBtn').addEventListener('click', closeLancamentoModal);
+  document.getElementById('lancamentoCancelBtn').addEventListener('click', closeLancamentoModal);
+  document.getElementById('lancamentoSaveBtn').addEventListener('click', saveLancamento);
+  lancamentoOverlay.addEventListener('click', e => { if (e.target === e.currentTarget) closeLancamentoModal(); });
+  document.getElementById('lTipoEntradaBtn').addEventListener('click', () => setLancamentoTipo('entrada'));
+  document.getElementById('lTipoSaidaBtn').addEventListener('click', () => setLancamentoTipo('saida'));
+  document.getElementById('lCategoria').addEventListener('change', e => populateLancamentoSubcategoriaSelect(e.target.value));
+
+  function setLancamentoTipo(tipo) {
+    finTipoAtual = tipo;
+    document.getElementById('lTipoEntradaBtn').classList.toggle('active', tipo === 'entrada');
+    document.getElementById('lTipoEntradaBtn').setAttribute('aria-pressed', String(tipo === 'entrada'));
+    document.getElementById('lTipoSaidaBtn').classList.toggle('active', tipo === 'saida');
+    document.getElementById('lTipoSaidaBtn').setAttribute('aria-pressed', String(tipo === 'saida'));
+    populateLancamentoCategoriaSelect();
+  }
+
+  function populateLancamentoCategoriaSelect(categoriaIdSelecionada, subcategoriaIdSelecionada) {
+    const lista = finTipoAtual === 'entrada' ? finCategoriasEntrada : finCategoriasSaida;
+    const raizes = lista.filter(c => !c.categoria_pai_id).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    const catSel = document.getElementById('lCategoria');
+    catSel.innerHTML = '<option value="">Sem categoria</option>' + raizes.map(c => `<option value="${c.id}" ${c.id === categoriaIdSelecionada ? 'selected' : ''}>${escapeHtml(c.nome)}</option>`).join('');
+    populateLancamentoSubcategoriaSelect(catSel.value, subcategoriaIdSelecionada);
+  }
+
+  function populateLancamentoSubcategoriaSelect(categoriaId, subcategoriaIdSelecionada) {
+    const lista = finTipoAtual === 'entrada' ? finCategoriasEntrada : finCategoriasSaida;
+    const subs = lista.filter(c => c.categoria_pai_id === categoriaId).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    const subSel = document.getElementById('lSubcategoria');
+    subSel.innerHTML = '<option value="">Nenhuma</option>' + subs.map(c => `<option value="${c.id}" ${c.id === subcategoriaIdSelecionada ? 'selected' : ''}>${escapeHtml(c.nome)}</option>`).join('');
+    subSel.closest('.field').hidden = subs.length === 0;
+  }
+
+  async function openLancamentoModal(id, triggerEl) {
+    if (!finCategoriasCarregadas) await populateFinCategoriaFilters();
+    lastFocusedEl = triggerEl || document.activeElement;
+    document.getElementById('lancamentoFormError').textContent = '';
+    document.getElementById('lValorPagoHint').hidden = true;
+
+    ['lId', 'lUpdatedAt', 'lNumeroDocumento', 'lObservacoes', 'lValor', 'lDataVencimento', 'lFormaPagamento'].forEach(f => { document.getElementById(f).value = ''; });
+    document.getElementById('lDataLancamento').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('lStatus').value = 'pendente';
+    document.getElementById('lOrigem').value = 'manual';
+    document.getElementById('lDescricao').value = '';
+    setLancamentoTipo('entrada');
+    document.getElementById('lancamentoModalTitle').textContent = id ? 'Editar Lançamento' : 'Novo Lançamento';
+
+    if (id) {
+      const l = lancamentoState.rows.find(x => x.id === id) || await HM.getLancamentoById(id);
+      if (!l) return;
+      document.getElementById('lId').value = l.id;
+      document.getElementById('lUpdatedAt').value = l.updatedAt || '';
+      document.getElementById('lDescricao').value = l.descricao;
+      document.getElementById('lValor').value = HM.formatPrice(l.valor);
+      document.getElementById('lDataLancamento').value = l.dataLancamento || '';
+      document.getElementById('lDataVencimento').value = l.dataVencimento || '';
+      document.getElementById('lFormaPagamento').value = l.formaPagamento || '';
+      document.getElementById('lStatus').value = l.status;
+      document.getElementById('lOrigem').value = l.origem;
+      document.getElementById('lNumeroDocumento').value = l.numeroDocumento || '';
+      document.getElementById('lObservacoes').value = l.observacoes || '';
+      setLancamentoTipo(l.tipo);
+      populateLancamentoCategoriaSelect(l.categoriaId, l.subcategoriaId);
+      if (l.valorPago > 0 && l.valorPago < l.valor) {
+        const hint = document.getElementById('lValorPagoHint');
+        hint.hidden = false;
+        hint.textContent = `Já foi baixado ${HM.formatPrice(l.valorPago)} deste lançamento (saldo em aberto: ${HM.formatPrice(l.saldo)}). Para dar mais uma baixa, use "Registrar pagamento" na lista em vez de editar o valor aqui.`;
+      }
+    }
+    openModal(lancamentoOverlay, document.getElementById('lDescricao'));
+  }
+  function closeLancamentoModal() { closeModalEl(lancamentoOverlay); }
+
+  async function saveLancamento() {
+    const descricao = document.getElementById('lDescricao').value.trim();
+    const valorStr = document.getElementById('lValor').value.trim();
+    const errEl = document.getElementById('lancamentoFormError');
+    if (!descricao || !valorStr) { errEl.textContent = 'Preencha a descrição e o valor.'; return; }
+    if (HM.parsePrice(valorStr) <= 0) { errEl.textContent = 'Informe um valor maior que zero.'; return; }
+    errEl.textContent = '';
+
+    const editId = document.getElementById('lId').value;
+    const status = document.getElementById('lStatus').value;
+    const valor = HM.parsePrice(valorStr);
+    const data = {
+      tipo: finTipoAtual,
+      descricao,
+      valor,
+      valorPago: status === 'pago' ? valor : 0,
+      categoriaId: document.getElementById('lCategoria').value || null,
+      subcategoriaId: document.getElementById('lSubcategoria').value || null,
+      dataLancamento: document.getElementById('lDataLancamento').value || null,
+      dataVencimento: document.getElementById('lDataVencimento').value || null,
+      dataPagamento: status === 'pago' ? new Date().toISOString().slice(0, 10) : null,
+      formaPagamento: document.getElementById('lFormaPagamento').value || null,
+      status,
+      origem: document.getElementById('lOrigem').value,
+      numeroDocumento: document.getElementById('lNumeroDocumento').value.trim(),
+      observacoes: document.getElementById('lObservacoes').value.trim(),
+    };
+
+    const saveBtn = document.getElementById('lancamentoSaveBtn');
+    saveBtn.disabled = true;
+    try {
+      if (editId) {
+        data.expectedUpdatedAt = document.getElementById('lUpdatedAt').value || null;
+        await HM.updateLancamento(editId, data);
+        toast('Lançamento atualizado!', 'success');
+      } else {
+        await HM.createLancamento(data);
+        toast('Lançamento registrado!', 'success');
+      }
+      await Promise.all([loadLancamentosPage(true), renderDashboardFinanceiro()]);
+      closeLancamentoModal();
+    } catch (err) {
+      console.error('[admin] Falha ao salvar lançamento.', err);
+      errEl.textContent = (err instanceof HM.ConcurrencyError) ? err.message : 'Não foi possível salvar o lançamento. Tente novamente.';
+    } finally {
+      saveBtn.disabled = false;
+    }
+  }
+
+  /* ── Modal de baixa (recebimento/pagamento parcial ou total) ── */
+  const baixaOverlay = document.getElementById('baixaModalOverlay');
+  let baixaLancamentoId = null;
+
+  document.getElementById('baixaCancelBtn').addEventListener('click', closeBaixaModal);
+  document.getElementById('baixaConfirmBtn').addEventListener('click', confirmBaixa);
+  baixaOverlay.addEventListener('click', e => { if (e.target === e.currentTarget) closeBaixaModal(); });
+
+  function openBaixaModal(id, triggerEl) {
+    const l = lancamentoState.rows.find(x => x.id === id);
+    if (!l) return;
+    baixaLancamentoId = id;
+    lastFocusedEl = triggerEl || document.activeElement;
+    document.getElementById('baixaModalTitle').textContent = l.tipo === 'entrada' ? 'Registrar recebimento' : 'Registrar pagamento';
+    document.getElementById('baixaModalSaldo').textContent = `Saldo em aberto: ${HM.formatPrice(l.saldo)} de ${HM.formatPrice(l.valor)}`;
+    document.getElementById('baixaValor').value = HM.formatPrice(l.saldo);
+    document.getElementById('baixaData').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('baixaFormError').textContent = '';
+    openModal(baixaOverlay, document.getElementById('baixaValor'));
+  }
+  function closeBaixaModal() { closeModalEl(baixaOverlay); baixaLancamentoId = null; }
+
+  async function confirmBaixa() {
+    const errEl = document.getElementById('baixaFormError');
+    const valor = HM.parsePrice(document.getElementById('baixaValor').value);
+    if (valor <= 0) { errEl.textContent = 'Informe um valor maior que zero.'; return; }
+    const btn = document.getElementById('baixaConfirmBtn');
+    btn.disabled = true;
+    try {
+      await HM.registrarPagamento(baixaLancamentoId, valor, document.getElementById('baixaData').value || null);
+      await Promise.all([loadLancamentosPage(true), renderDashboardFinanceiro()]);
+      closeBaixaModal();
+      toast('Baixa registrada!', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao registrar baixa.', err);
+      errEl.textContent = 'Não foi possível registrar essa baixa. Tente novamente.';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   /* ── EXCLUSÃO (modal de confirmação compartilhado) ── */
   const confirmOverlay = document.getElementById('confirmOverlay');
   document.getElementById('confirmCancelBtn').addEventListener('click', closeConfirm);
@@ -697,8 +1077,12 @@
         await HM.deleteConsig(id);
         await loadConsigPage(true);
         toast('Consignação excluída.', 'success');
+      } else if (type === 'lancamento') {
+        await HM.deleteLancamento(id);
+        await loadLancamentosPage(true);
+        toast('Lançamento excluído.', 'success');
       }
-      await renderDashboard();
+      if (type === 'vehicle' || type === 'consig') await renderDashboard();
       closeConfirm();
     } catch (err) {
       console.error('[admin] Falha ao excluir.', err);
@@ -960,7 +1344,7 @@
   }
 
   /* ── FORMATAÇÃO DE PREÇO (aplica em qualquer campo de preço do painel) ── */
-  ['vPrice', 'cValue'].forEach(id => {
+  ['vPrice', 'cValue', 'lValor', 'baixaValor'].forEach(id => {
     document.getElementById(id).addEventListener('input', function () {
       const v = this.value.replace(/[^\d]/g, '');
       this.value = v ? HM.formatPrice(Number(v)) : '';
@@ -999,6 +1383,8 @@
       if (overlay === vehicleOverlay) closeVehicleModal();
       else if (overlay === consigOverlay) closeConsigModal();
       else if (overlay === confirmOverlay) closeConfirm();
+      else if (overlay === lancamentoOverlay) closeLancamentoModal();
+      else if (overlay === baixaOverlay) closeBaixaModal();
       return;
     }
     if (e.key !== 'Tab') return;

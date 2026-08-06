@@ -632,6 +632,227 @@ const HM = (function () {
     await logAction('revogar', 'usuario', null, { resumo: `removeu a autorização do e-mail ${email} para entrar com Google` });
   }
 
+  // ══════════════════════════════════════════════════════════════════════
+  // MÓDULO FINANCEIRO
+  // ------------------------------------------------------------------------
+  // Um único ledger (lancamentos_financeiros) cobre Fluxo de Caixa, Contas a
+  // Receber, Contas a Pagar, Despesas e Receitas — são filtros diferentes
+  // sobre a mesma tabela, não cadastros separados. Auditoria (valor
+  // anterior/novo) é automática via trigger de banco, não precisa de
+  // logAction() manual aqui. Restrito a gerente/administrador via RLS —
+  // essas funções simplesmente falham com erro de permissão pra vendedor.
+  // ══════════════════════════════════════════════════════════════════════
+
+  const LANCAMENTO_SELECT = `
+    *,
+    categoria:categorias_financeiras!lancamentos_financeiros_categoria_id_fkey(id, nome),
+    subcategoria:categorias_financeiras!lancamentos_financeiros_subcategoria_id_fkey(id, nome),
+    cliente:clientes(id, nome, cpf_cnpj, telefone),
+    fornecedor:fornecedores(id, nome, cpf_cnpj, telefone)
+  `;
+
+  function mapLancamentoRow(row) {
+    return {
+      id: row.id,
+      tipo: row.tipo,
+      descricao: row.descricao,
+      categoriaId: row.categoria_id,
+      categoriaNome: row.categoria?.nome || '',
+      subcategoriaId: row.subcategoria_id,
+      subcategoriaNome: row.subcategoria?.nome || '',
+      valor: Number(row.valor) || 0,
+      valorPago: Number(row.valor_pago) || 0,
+      saldo: Number(row.saldo) || 0,
+      dataLancamento: row.data_lancamento,
+      dataVencimento: row.data_vencimento,
+      dataPagamento: row.data_pagamento,
+      formaPagamento: row.forma_pagamento,
+      status: row.status,
+      vencida: row.status === 'pendente' && row.data_vencimento && row.data_vencimento < new Date().toISOString().slice(0, 10),
+      origem: row.origem,
+      veiculoId: row.veiculo_id,
+      consignacaoId: row.consignacao_id,
+      clienteId: row.cliente_id,
+      clienteNome: row.cliente?.nome || '',
+      fornecedorId: row.fornecedor_id,
+      fornecedorNome: row.fornecedor?.nome || '',
+      responsavelId: row.responsavel_id,
+      numeroDocumento: row.numero_documento,
+      numeroParcela: row.numero_parcela,
+      totalParcelas: row.total_parcelas,
+      centroCusto: row.centro_custo,
+      observacoes: row.observacoes,
+      updatedAt: row.updated_at,
+      createdAt: row.created_at,
+    };
+  }
+
+  function lancamentoPayload(input) {
+    return {
+      tipo: input.tipo,
+      descricao: input.descricao,
+      categoria_id: input.categoriaId || null,
+      subcategoria_id: input.subcategoriaId || null,
+      valor: typeof input.valor === 'number' ? input.valor : parsePrice(input.valor),
+      valor_pago: typeof input.valorPago === 'number' ? input.valorPago : parsePrice(input.valorPago || 0),
+      data_lancamento: input.dataLancamento || new Date().toISOString().slice(0, 10),
+      data_vencimento: input.dataVencimento || null,
+      data_pagamento: input.dataPagamento || null,
+      forma_pagamento: input.formaPagamento || null,
+      status: input.status || 'pendente',
+      origem: input.origem || 'manual',
+      veiculo_id: input.veiculoId || null,
+      consignacao_id: input.consignacaoId || null,
+      cliente_id: input.clienteId || null,
+      fornecedor_id: input.fornecedorId || null,
+      responsavel_id: input.responsavelId || null,
+      numero_documento: input.numeroDocumento || null,
+      numero_parcela: input.numeroParcela || null,
+      total_parcelas: input.totalParcelas || null,
+      centro_custo: input.centroCusto || null,
+      observacoes: input.observacoes || null,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  /** Lista paginada com os mesmos filtros que alimentam Fluxo de Caixa,
+   * Contas a Receber/Pagar, Despesas e Receitas — cada tela chama isto com
+   * um recorte diferente de `tipo`/`status`/`origem`. */
+  async function getLancamentos({
+    page = 0, pageSize = 25, search = '',
+    tipo = '', status = '', formaPagamento = '', categoriaId = '',
+    clienteId = '', fornecedorId = '', veiculoId = '', responsavelId = '',
+    dataInicio = '', dataFim = '', valorMin, valorMax,
+    orderBy = 'recentes',
+  } = {}) {
+    let query = supabaseClient.from('lancamentos_financeiros').select(LANCAMENTO_SELECT, { count: 'exact' });
+
+    const ORDENACOES = {
+      recentes: { column: 'data_lancamento', ascending: false },
+      'vencimento-proximo': { column: 'data_vencimento', ascending: true },
+      'maior-valor': { column: 'valor', ascending: false },
+      'menor-valor': { column: 'valor', ascending: true },
+    };
+    const ordenacao = ORDENACOES[orderBy] || ORDENACOES.recentes;
+    query = query.order(ordenacao.column, { ascending: ordenacao.ascending, nullsFirst: false });
+
+    if (search) query = query.ilike('descricao', `%${search}%`);
+    if (tipo) query = query.eq('tipo', tipo);
+    if (status) query = query.eq('status', status);
+    if (formaPagamento) query = query.eq('forma_pagamento', formaPagamento);
+    if (categoriaId) query = query.eq('categoria_id', categoriaId);
+    if (clienteId) query = query.eq('cliente_id', clienteId);
+    if (fornecedorId) query = query.eq('fornecedor_id', fornecedorId);
+    if (veiculoId) query = query.eq('veiculo_id', veiculoId);
+    if (responsavelId) query = query.eq('responsavel_id', responsavelId);
+    if (dataInicio) query = query.gte('data_lancamento', dataInicio);
+    if (dataFim) query = query.lte('data_lancamento', dataFim);
+    if (typeof valorMin === 'number') query = query.gte('valor', valorMin);
+    if (typeof valorMax === 'number') query = query.lte('valor', valorMax);
+
+    query = query.range(page * pageSize, page * pageSize + pageSize - 1);
+    const { data, error, count } = await query;
+    if (error) throw error;
+    return { rows: data.map(mapLancamentoRow), total: count || 0, page, pageSize };
+  }
+
+  async function getLancamentoById(id) {
+    const row = unwrap(await supabaseClient.from('lancamentos_financeiros').select(LANCAMENTO_SELECT).eq('id', id).maybeSingle());
+    return row ? mapLancamentoRow(row) : null;
+  }
+
+  async function createLancamento(input) {
+    const row = unwrap(await supabaseClient.from('lancamentos_financeiros').insert(lancamentoPayload(input)).select('id').single());
+    return row.id;
+  }
+
+  /** `input.expectedUpdatedAt` ativa a checagem de concorrência otimista —
+   * mesmo padrão de updateVehicle/updateConsig: se o lançamento mudou entre
+   * a leitura e a gravação, lança ConcurrencyError em vez de sobrescrever. */
+  async function updateLancamento(id, input) {
+    let query = supabaseClient.from('lancamentos_financeiros').update(lancamentoPayload(input)).eq('id', id);
+    if (input.expectedUpdatedAt) query = query.eq('updated_at', input.expectedUpdatedAt);
+    const { data, error } = await query.select('id');
+    if (error) throw error;
+    if (input.expectedUpdatedAt && (!data || !data.length)) {
+      throw new ConcurrencyError('Este lançamento foi alterado por outra pessoa enquanto você editava. Recarregue a lista e tente novamente.');
+    }
+  }
+
+  async function deleteLancamento(id) {
+    unwrap(await supabaseClient.from('lancamentos_financeiros').delete().eq('id', id));
+  }
+
+  /** Baixa (recebimento/pagamento) parcial ou total via RPC atômica —
+   * `registrar_pagamento` soma o valor dentro do próprio UPDATE no banco,
+   * então duas baixas simultâneas no mesmo lançamento nunca se perdem. */
+  async function registrarPagamento(id, valor, dataPagamento) {
+    const { data, error } = await supabaseClient.rpc('registrar_pagamento', {
+      p_id: id,
+      p_valor: valor,
+      p_data_pagamento: dataPagamento || new Date().toISOString().slice(0, 10),
+    });
+    if (error) throw error;
+    return mapLancamentoRow(data);
+  }
+
+  /** Reabre uma cobrança/pagamento cancelado ou já baixado incorretamente —
+   * zera o valor pago e volta pro estado "pendente". */
+  async function reabrirLancamento(id) {
+    unwrap(await supabaseClient.from('lancamentos_financeiros')
+      .update({ status: 'pendente', valor_pago: 0, data_pagamento: null, updated_at: new Date().toISOString() })
+      .eq('id', id));
+  }
+
+  async function getCategoriasFinanceiras(tipo) {
+    let query = supabaseClient.from('categorias_financeiras').select('id, tipo, nome, categoria_pai_id').order('nome', { ascending: true });
+    if (tipo) query = query.eq('tipo', tipo);
+    return unwrap(await query);
+  }
+
+  async function createCategoriaFinanceira(tipo, nome, categoriaPaiId) {
+    const row = unwrap(await supabaseClient.from('categorias_financeiras').insert({ tipo, nome, categoria_pai_id: categoriaPaiId || null }).select('id').single());
+    return row.id;
+  }
+
+  async function getClientes(search) {
+    let query = supabaseClient.from('clientes').select('id, nome, cpf_cnpj, telefone').order('nome', { ascending: true }).limit(50);
+    if (search) query = query.ilike('nome', `%${search}%`);
+    return unwrap(await query);
+  }
+
+  async function createCliente(input) {
+    const row = unwrap(await supabaseClient.from('clientes').insert({ nome: input.nome, cpf_cnpj: input.cpfCnpj || null, telefone: input.telefone || null }).select('id').single());
+    return row.id;
+  }
+
+  async function getFornecedores(search) {
+    let query = supabaseClient.from('fornecedores').select('id, nome, cpf_cnpj, telefone, categoria').order('nome', { ascending: true }).limit(50);
+    if (search) query = query.ilike('nome', `%${search}%`);
+    return unwrap(await query);
+  }
+
+  async function createFornecedor(input) {
+    const row = unwrap(await supabaseClient.from('fornecedores').insert({ nome: input.nome, cpf_cnpj: input.cpfCnpj || null, telefone: input.telefone || null, categoria: input.categoria || null }).select('id').single());
+    return row.id;
+  }
+
+  /** Cards e séries do Dashboard Financeiro — uma única chamada RPC agregada
+   * no banco, não baixa lançamento nenhum pro navegador pra somar aqui. */
+  async function getDashboardFinanceiro() {
+    const { data, error } = await supabaseClient.rpc('dashboard_financeiro');
+    if (error) throw error;
+    return data;
+  }
+
+  /** Formata data ISO ("2026-08-06") para pt-BR ("06/08/2026") — usada em
+   * qualquer tela nova pra não repetir `toLocaleDateString('pt-BR')` com a
+   * correção de fuso (meio-dia UTC) espalhada pelo código. */
+  function formatDateBR(isoDate) {
+    if (!isoDate) return '—';
+    return new Date(isoDate + 'T12:00:00').toLocaleDateString('pt-BR');
+  }
+
   // ── INTERESSE POR VEÍCULO (visualizações e cliques em WhatsApp) ──
 
   /**
@@ -886,6 +1107,22 @@ const HM = (function () {
     getAllowedEmails,
     addAllowedEmail,
     removeAllowedEmail,
+    // financeiro
+    getLancamentos,
+    getLancamentoById,
+    createLancamento,
+    updateLancamento,
+    deleteLancamento,
+    registrarPagamento,
+    reabrirLancamento,
+    getCategoriasFinanceiras,
+    createCategoriaFinanceira,
+    getClientes,
+    createCliente,
+    getFornecedores,
+    createFornecedor,
+    getDashboardFinanceiro,
+    formatDateBR,
     // interesse por veículo
     logInteresse,
     getInteresseVeiculos,
@@ -900,6 +1137,7 @@ const HM = (function () {
     wppLink,
     formatKm,
     formatPrice,
+    parsePrice,
     compressImage,
   };
 })();

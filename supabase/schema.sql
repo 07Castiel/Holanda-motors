@@ -810,3 +810,254 @@ begin
   return new;
 end;
 $$;
+
+-- ============================================================================
+-- PARTE 8 — Módulo Financeiro (Fase 1: fundação completa do schema)
+-- ----------------------------------------------------------------------------
+-- Ledger único (lancamentos_financeiros) em vez de tabelas separadas por
+-- página — Fluxo de Caixa, Contas a Receber/Pagar, Despesas e Receitas são
+-- todos essa mesma tabela sob filtros diferentes (tipo/status/origem).
+-- Todo o módulo é restrito a gerente/administrador (RLS) — vendedor não
+-- enxerga nenhum dado financeiro. Idempotente como o resto do arquivo.
+-- ============================================================================
+
+create table if not exists categorias_financeiras (
+  id uuid primary key default gen_random_uuid(),
+  tipo text not null check (tipo in ('entrada', 'saida')),
+  nome text not null,
+  categoria_pai_id uuid references categorias_financeiras (id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists idx_categorias_financeiras_raiz
+  on categorias_financeiras (tipo, nome) where categoria_pai_id is null;
+create unique index if not exists idx_categorias_financeiras_sub
+  on categorias_financeiras (tipo, nome, categoria_pai_id) where categoria_pai_id is not null;
+create index if not exists idx_categorias_financeiras_pai on categorias_financeiras (categoria_pai_id);
+
+create table if not exists clientes (
+  id uuid primary key default gen_random_uuid(),
+  nome text not null,
+  cpf_cnpj text,
+  telefone text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists fornecedores (
+  id uuid primary key default gen_random_uuid(),
+  nome text not null,
+  cpf_cnpj text,
+  telefone text,
+  categoria text,
+  created_at timestamptz not null default now()
+);
+
+-- status "vencido" não é mantido por job em segundo plano (o projeto não usa
+-- pg_cron) — é calculado na consulta (status = 'pendente' e data_vencimento
+-- no passado). O valor 'vencido' fica disponível na constraint pra quando o
+-- usuário quiser marcar manualmente, mas normalmente nasce e some sozinho
+-- conforme pendente vira pago, sem depender de nada rodando periodicamente.
+create table if not exists lancamentos_financeiros (
+  id uuid primary key default gen_random_uuid(),
+  tipo text not null check (tipo in ('entrada', 'saida')),
+  descricao text not null,
+  categoria_id uuid references categorias_financeiras (id) on delete set null,
+  subcategoria_id uuid references categorias_financeiras (id) on delete set null,
+  valor numeric(12, 2) not null check (valor >= 0),
+  valor_pago numeric(12, 2) not null default 0 check (valor_pago >= 0),
+  saldo numeric(12, 2) generated always as (valor - valor_pago) stored,
+  data_lancamento date not null default current_date,
+  data_vencimento date,
+  data_pagamento date,
+  forma_pagamento text check (forma_pagamento in ('pix', 'dinheiro', 'cartao_debito', 'cartao_credito', 'transferencia', 'financiamento', 'cheque')),
+  status text not null default 'pendente' check (status in ('pago', 'pendente', 'vencido', 'cancelado')),
+  origem text not null default 'manual' check (origem in ('venda', 'consignacao', 'manual')),
+  veiculo_id uuid references veiculos (id) on delete set null,
+  consignacao_id uuid references consignacoes (id) on delete set null,
+  cliente_id uuid references clientes (id) on delete set null,
+  fornecedor_id uuid references fornecedores (id) on delete set null,
+  responsavel_id uuid references auth.users (id) on delete set null,
+  numero_documento text,
+  numero_parcela integer,
+  total_parcelas integer,
+  centro_custo text,
+  observacoes text,
+  updated_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  constraint lancamentos_valor_pago_valido check (valor_pago <= valor)
+);
+
+create index if not exists idx_lancamentos_data on lancamentos_financeiros (data_lancamento desc);
+create index if not exists idx_lancamentos_vencimento on lancamentos_financeiros (data_vencimento);
+create index if not exists idx_lancamentos_status on lancamentos_financeiros (status);
+create index if not exists idx_lancamentos_tipo on lancamentos_financeiros (tipo);
+create index if not exists idx_lancamentos_categoria on lancamentos_financeiros (categoria_id);
+create index if not exists idx_lancamentos_subcategoria on lancamentos_financeiros (subcategoria_id);
+create index if not exists idx_lancamentos_cliente on lancamentos_financeiros (cliente_id);
+create index if not exists idx_lancamentos_fornecedor on lancamentos_financeiros (fornecedor_id);
+create index if not exists idx_lancamentos_veiculo on lancamentos_financeiros (veiculo_id);
+create index if not exists idx_lancamentos_consignacao on lancamentos_financeiros (consignacao_id);
+create index if not exists idx_lancamentos_responsavel on lancamentos_financeiros (responsavel_id);
+
+-- ----------------------------------------------------------------------------
+-- RLS — todo o módulo restrito a gerente/administrador; exclusão só admin.
+-- ----------------------------------------------------------------------------
+alter table categorias_financeiras enable row level security;
+alter table clientes enable row level security;
+alter table fornecedores enable row level security;
+alter table lancamentos_financeiros enable row level security;
+
+drop policy if exists "categorias_financeiras_select" on categorias_financeiras;
+create policy "categorias_financeiras_select" on categorias_financeiras for select
+  using ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "categorias_financeiras_insert" on categorias_financeiras;
+create policy "categorias_financeiras_insert" on categorias_financeiras for insert
+  with check ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "categorias_financeiras_update" on categorias_financeiras;
+create policy "categorias_financeiras_update" on categorias_financeiras for update
+  using ((select public.current_user_role()) in ('gerente', 'administrador'))
+  with check ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "categorias_financeiras_delete" on categorias_financeiras;
+create policy "categorias_financeiras_delete" on categorias_financeiras for delete
+  using ((select public.current_user_role()) = 'administrador');
+
+drop policy if exists "clientes_select" on clientes;
+create policy "clientes_select" on clientes for select
+  using ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "clientes_insert" on clientes;
+create policy "clientes_insert" on clientes for insert
+  with check ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "clientes_update" on clientes;
+create policy "clientes_update" on clientes for update
+  using ((select public.current_user_role()) in ('gerente', 'administrador'))
+  with check ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "clientes_delete" on clientes;
+create policy "clientes_delete" on clientes for delete
+  using ((select public.current_user_role()) = 'administrador');
+
+drop policy if exists "fornecedores_select" on fornecedores;
+create policy "fornecedores_select" on fornecedores for select
+  using ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "fornecedores_insert" on fornecedores;
+create policy "fornecedores_insert" on fornecedores for insert
+  with check ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "fornecedores_update" on fornecedores;
+create policy "fornecedores_update" on fornecedores for update
+  using ((select public.current_user_role()) in ('gerente', 'administrador'))
+  with check ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "fornecedores_delete" on fornecedores;
+create policy "fornecedores_delete" on fornecedores for delete
+  using ((select public.current_user_role()) = 'administrador');
+
+drop policy if exists "lancamentos_select" on lancamentos_financeiros;
+create policy "lancamentos_select" on lancamentos_financeiros for select
+  using ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "lancamentos_insert" on lancamentos_financeiros;
+create policy "lancamentos_insert" on lancamentos_financeiros for insert
+  with check ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "lancamentos_update" on lancamentos_financeiros;
+create policy "lancamentos_update" on lancamentos_financeiros for update
+  using ((select public.current_user_role()) in ('gerente', 'administrador'))
+  with check ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "lancamentos_delete" on lancamentos_financeiros;
+create policy "lancamentos_delete" on lancamentos_financeiros for delete
+  using ((select public.current_user_role()) = 'administrador');
+
+-- ----------------------------------------------------------------------------
+-- AUDITORIA — todo insert/update/delete em lancamentos_financeiros gera uma
+-- linha em logs_acoes automaticamente (não depende do código cliente lembrar
+-- de registrar), com valores antigo/novo em "detalhes". A função só existe
+-- pra disparar via trigger — EXECUTE revogado de público/autenticado abaixo,
+-- mesmo raciocínio de handle_new_user na Parte 2.
+-- ----------------------------------------------------------------------------
+create or replace function public.log_lancamento_financeiro()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text := auth.jwt() ->> 'email';
+begin
+  if TG_OP = 'INSERT' then
+    insert into public.logs_acoes (usuario_id, usuario_email, acao, entidade, entidade_id, detalhes)
+    values (auth.uid(), v_email, 'criar', 'lancamento_financeiro', NEW.id,
+      jsonb_build_object('resumo', 'criou um lançamento financeiro', 'descricao', NEW.descricao, 'valor_novo', NEW.valor, 'tipo', NEW.tipo));
+    return NEW;
+  elsif TG_OP = 'UPDATE' then
+    insert into public.logs_acoes (usuario_id, usuario_email, acao, entidade, entidade_id, detalhes)
+    values (auth.uid(), v_email, 'editar', 'lancamento_financeiro', NEW.id,
+      jsonb_build_object(
+        'resumo', 'editou um lançamento financeiro',
+        'descricao', NEW.descricao,
+        'valor_anterior', OLD.valor, 'valor_novo', NEW.valor,
+        'valor_pago_anterior', OLD.valor_pago, 'valor_pago_novo', NEW.valor_pago,
+        'status_anterior', OLD.status, 'status_novo', NEW.status
+      ));
+    return NEW;
+  elsif TG_OP = 'DELETE' then
+    insert into public.logs_acoes (usuario_id, usuario_email, acao, entidade, entidade_id, detalhes)
+    values (auth.uid(), v_email, 'excluir', 'lancamento_financeiro', OLD.id,
+      jsonb_build_object('resumo', 'excluiu um lançamento financeiro', 'descricao', OLD.descricao, 'valor_anterior', OLD.valor));
+    return OLD;
+  end if;
+  return null;
+end;
+$$;
+revoke execute on function public.log_lancamento_financeiro() from public, anon, authenticated;
+
+drop trigger if exists trg_log_lancamento_financeiro on lancamentos_financeiros;
+create trigger trg_log_lancamento_financeiro
+  after insert or update or delete on lancamentos_financeiros
+  for each row execute function public.log_lancamento_financeiro();
+
+-- ----------------------------------------------------------------------------
+-- RPC: baixa (pagamento/recebimento) parcial ou total de forma atômica — a
+-- soma acontece dentro do próprio UPDATE, então duas baixas simultâneas no
+-- mesmo lançamento nunca se perdem (mesmo raciocínio do toggle_veiculo_ativo).
+-- SECURITY INVOKER: roda com o RLS de quem chama, sem precisar duplicar a
+-- checagem de papel aqui dentro.
+-- ----------------------------------------------------------------------------
+create or replace function public.registrar_pagamento(p_id uuid, p_valor numeric, p_data_pagamento date default current_date)
+returns lancamentos_financeiros
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_row lancamentos_financeiros;
+begin
+  if p_valor <= 0 then
+    raise exception 'O valor do pagamento deve ser maior que zero.';
+  end if;
+
+  update lancamentos_financeiros
+  set valor_pago = least(valor, valor_pago + p_valor),
+      status = case when valor_pago + p_valor >= valor then 'pago' else 'pendente' end,
+      data_pagamento = p_data_pagamento,
+      updated_at = now()
+  where id = p_id
+  returning * into v_row;
+
+  if v_row.id is null then
+    raise exception 'Lançamento não encontrado.';
+  end if;
+  return v_row;
+end;
+$$;
+grant execute on function public.registrar_pagamento(uuid, numeric, date) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- SEED — categorias padrão (entrada e saída), cobrindo os exemplos pedidos.
+-- ----------------------------------------------------------------------------
+insert into categorias_financeiras (tipo, nome) values
+  ('entrada', 'Venda de veículo'), ('entrada', 'Consignação'), ('entrada', 'Serviços'),
+  ('entrada', 'Comissões recebidas'), ('entrada', 'Financiamentos'), ('entrada', 'Outras receitas'),
+  ('saida', 'Combustível'), ('saida', 'Lavagem'), ('saida', 'Polimento'), ('saida', 'Documentação'),
+  ('saida', 'Despachante'), ('saida', 'Oficina'), ('saida', 'Marketing'), ('saida', 'Frete'),
+  ('saida', 'Alimentação'), ('saida', 'Escritório'), ('saida', 'Fornecedores'), ('saida', 'Impostos'),
+  ('saida', 'Aluguel'), ('saida', 'Energia'), ('saida', 'Água'), ('saida', 'Internet'),
+  ('saida', 'Funcionários'), ('saida', 'Manutenção'), ('saida', 'Outros')
+on conflict do nothing;
+
+-- Índice de FK que ficou faltando na Parte 7 (achado do Advisor).
+create index if not exists idx_emails_permitidos_criado_por on emails_permitidos (criado_por);
