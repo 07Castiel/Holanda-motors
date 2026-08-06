@@ -45,10 +45,17 @@
     submitBtn.disabled = true;
     try {
       await HM.login(email, pass);
-      await enterAdminApp();
     } catch (err) {
       console.error('[admin] Falha no login.', err);
       errEl.textContent = 'E-mail ou senha incorretos.';
+      submitBtn.disabled = false;
+      return;
+    }
+    try {
+      await enterAdminApp();
+    } catch (err) {
+      console.error('[admin] Login ok, mas falhou ao carregar o painel.', err);
+      errEl.textContent = `Login feito, mas o painel não carregou: ${err.message || err}`;
     } finally {
       submitBtn.disabled = false;
     }
@@ -91,16 +98,29 @@
     document.getElementById('loginError').textContent = '';
   }
 
-  /** Ao carregar a página, mantém a sessão se o gestor já estiver autenticado. */
+  /** Ao carregar a página, mantém a sessão se o gestor já estiver autenticado
+   * (inclusive voltando de um redirecionamento OAuth do Google). Os dois
+   * passos são tratados em separado: uma falha genuína de conexão com o
+   * Supabase é bem diferente de uma sessão válida cujo carregamento do
+   * painel deu errado — mostrar o mesmo aviso pras duas coisas só esconde
+   * a causa real. */
   (async function initSession() {
+    let session;
     try {
-      const session = await HM.getSession();
-      if (session) await enterAdminApp();
-      else showLoginScreen();
+      session = await HM.getSession();
     } catch (err) {
       console.error('[admin] Falha ao verificar sessão.', err);
       showLoginScreen();
       document.getElementById('loginError').textContent = 'Não foi possível conectar ao Supabase. Verifique sua conexão ou a configuração em supabase-client.js.';
+      return;
+    }
+    if (!session) { showLoginScreen(); return; }
+    try {
+      await enterAdminApp();
+    } catch (err) {
+      console.error('[admin] Sessão válida, mas falhou ao carregar o painel.', err);
+      showLoginScreen();
+      document.getElementById('loginError').textContent = `Login feito, mas o painel não carregou: ${err.message || err}`;
     }
   })();
 
