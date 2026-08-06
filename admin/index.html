@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../assets/css/base.css?v=2">
-<link rel="stylesheet" href="../assets/css/admin.css?v=2">
+<link rel="stylesheet" href="../assets/css/base.css?v=3">
+<link rel="stylesheet" href="../assets/css/admin.css?v=3">
 </head>
 <body>
 
@@ -230,6 +230,30 @@
               </tr>
             </thead>
             <tbody id="usersTableBody"></tbody>
+          </table>
+        </div>
+
+        <div class="section-header" style="margin-top:32px">
+          <h1 class="section-title">E-mails autorizados a entrar com Google</h1>
+        </div>
+        <p class="page-hint">Login por e-mail/senha continua restrito a quem você cadastra no dashboard do Supabase. Login com Google é diferente: qualquer conta do Google consegue tentar — só os e-mails desta lista conseguem completar o login. Adicione aqui antes de pedir pra alguém entrar com Google.</p>
+        <div class="search-bar">
+          <label class="sr-only" for="allowedEmailInput">Adicionar e-mail autorizado</label>
+          <input class="search-input" id="allowedEmailInput" type="email" placeholder="nome@gmail.com">
+          <button class="btn-primary" id="allowedEmailAddBtn" type="button">Autorizar</button>
+        </div>
+        <p class="field-error" id="allowedEmailError" role="alert"></p>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">Lista de e-mails autorizados a entrar com Google</caption>
+            <thead>
+              <tr>
+                <th scope="col">E-mail</th>
+                <th scope="col">Autorizado em</th>
+                <th scope="col">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="allowedEmailsTableBody"></tbody>
           </table>
         </div>
       </section>
@@ -487,8 +511,8 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.2"></script>
-<script src="../assets/js/supabase-client.js?v=2"></script>
-<script src="../assets/js/data.js?v=2"></script>
-<script src="../assets/js/admin.js?v=2"></script>
+<script src="../assets/js/supabase-client.js?v=3"></script>
+<script src="../assets/js/data.js?v=3"></script>
+<script src="../assets/js/admin.js?v=3"></script>
 </body>
 </html>

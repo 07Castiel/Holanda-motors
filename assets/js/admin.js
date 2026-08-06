@@ -169,7 +169,7 @@
     document.getElementById('topbarTitle').textContent = titles[page] || page;
     if (window.innerWidth < 900) closeSidebar();
     document.getElementById('mainContent').focus?.();
-    if (page === 'usuarios') renderUsersTable();
+    if (page === 'usuarios') { renderUsersTable(); renderAllowedEmailsTable(); }
     if (page === 'logs') loadLogsPage(true);
   }
 
@@ -868,6 +868,53 @@
       tbody.innerHTML = `<tr><td colspan="4">Não foi possível carregar os usuários.</td></tr>`;
     }
   }
+
+  /* ── E-MAILS AUTORIZADOS A ENTRAR COM GOOGLE ── */
+  async function renderAllowedEmailsTable() {
+    const tbody = document.getElementById('allowedEmailsTableBody');
+    tbody.innerHTML = `<tr><td colspan="3">Carregando…</td></tr>`;
+    try {
+      const emails = await HM.getAllowedEmails();
+      tbody.innerHTML = emails.length ? emails.map(e => `
+        <tr>
+          <td>${escapeHtml(e.email)}</td>
+          <td style="font-size:12px;color:var(--gray)">${new Date(e.created_at).toLocaleDateString('pt-BR')}</td>
+          <td><button class="btn-icon del" type="button" data-remove-email="${escapeHtml(e.email)}" aria-label="Remover autorização de ${escapeHtml(e.email)}">${ICON_DEL}</button></td>
+        </tr>
+      `).join('') : `<tr><td colspan="3"><div class="empty-state"><p>Nenhum e-mail autorizado ainda.</p></div></td></tr>`;
+      tbody.querySelectorAll('[data-remove-email]').forEach(btn => btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          await HM.removeAllowedEmail(btn.dataset.removeEmail);
+          renderAllowedEmailsTable();
+        } catch (err) {
+          console.error('[admin] Falha ao remover e-mail autorizado.', err);
+          toast('Não foi possível remover o e-mail.', 'error');
+          btn.disabled = false;
+        }
+      }));
+    } catch (err) {
+      console.error('[admin] Falha ao carregar e-mails autorizados.', err);
+      tbody.innerHTML = `<tr><td colspan="3">Não foi possível carregar a lista.</td></tr>`;
+    }
+  }
+
+  document.getElementById('allowedEmailAddBtn').addEventListener('click', async () => {
+    const input = document.getElementById('allowedEmailInput');
+    const errEl = document.getElementById('allowedEmailError');
+    const email = input.value.trim();
+    errEl.textContent = '';
+    if (!email) { errEl.textContent = 'Informe um e-mail.'; return; }
+    try {
+      await HM.addAllowedEmail(email);
+      input.value = '';
+      renderAllowedEmailsTable();
+      toast('E-mail autorizado.', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao autorizar e-mail.', err);
+      errEl.textContent = err.message?.includes('duplicate') ? 'Esse e-mail já está autorizado.' : 'Não foi possível autorizar esse e-mail.';
+    }
+  });
 
   /* ── LOGS (trilha de auditoria completa) ── */
   let logsState = { page: 0, pageSize: 25, entidade: '', rows: [], total: 0 };

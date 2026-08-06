@@ -616,6 +616,22 @@ const HM = (function () {
     await logAction('papel', 'usuario', userId, { resumo: `alterou o nível de acesso de um usuário para ${role}` });
   }
 
+  // ── E-MAILS AUTORIZADOS A ENTRAR VIA LOGIN SOCIAL (GOOGLE) ──
+
+  async function getAllowedEmails() {
+    return unwrap(await supabaseClient.from('emails_permitidos').select('email, created_at').order('created_at', { ascending: true }));
+  }
+
+  async function addAllowedEmail(email) {
+    unwrap(await supabaseClient.from('emails_permitidos').insert({ email: email.trim().toLowerCase() }));
+    await logAction('permitir', 'usuario', null, { resumo: `autorizou o e-mail ${email} a entrar com Google` });
+  }
+
+  async function removeAllowedEmail(email) {
+    unwrap(await supabaseClient.from('emails_permitidos').delete().eq('email', email));
+    await logAction('revogar', 'usuario', null, { resumo: `removeu a autorização do e-mail ${email} para entrar com Google` });
+  }
+
   // ── INTERESSE POR VEÍCULO (visualizações e cliques em WhatsApp) ──
 
   /**
@@ -867,6 +883,9 @@ const HM = (function () {
     getCurrentUserProfile,
     getUsers,
     updateUserRole,
+    getAllowedEmails,
+    addAllowedEmail,
+    removeAllowedEmail,
     // interesse por veículo
     logInteresse,
     getInteresseVeiculos,

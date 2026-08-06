@@ -758,3 +758,55 @@ begin
     alter extension pg_trgm set schema extensions;
   end if;
 end $$;
+
+-- ============================================================================
+-- PARTE 7 — Lista de e-mails autorizados a entrar via login social (Google)
+-- ----------------------------------------------------------------------------
+-- Login por e-mail/senha só funciona pra contas criadas pelo administrador no
+-- dashboard do Supabase (lista fechada). Login social (Google) não tem essa
+-- restrição por padrão — qualquer conta do Google conseguiria criar um perfil
+-- "vendedor" e acessar o estoque. Esta tabela fecha essa brecha: só e-mails
+-- cadastrados aqui conseguem concluir o login via provedor social.
+-- ============================================================================
+
+create table if not exists emails_permitidos (
+  email text primary key,
+  criado_por uuid references auth.users (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+alter table emails_permitidos enable row level security;
+
+drop policy if exists "emails_permitidos_admin_only" on emails_permitidos;
+create policy "emails_permitidos_admin_only" on emails_permitidos for all
+  using ((select public.current_user_role()) = 'administrador')
+  with check ((select public.current_user_role()) = 'administrador');
+
+-- Substitui handle_new_user (Parte 2): agora rejeita login social de e-mails
+-- fora da lista, mas continua sem restrição pra login por e-mail/senha (já é
+-- fechado por natureza — só quem tem acesso ao dashboard cria essas contas) e
+-- pro primeiro usuário do sistema (bootstrap inicial, vira administrador).
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if exists (select 1 from public.usuarios)
+     and coalesce(new.raw_app_meta_data ->> 'provider', 'email') <> 'email'
+     and not exists (select 1 from public.emails_permitidos where lower(email) = lower(new.email)) then
+    raise exception 'E-mail não autorizado a acessar o painel via login social.';
+  end if;
+
+  insert into public.usuarios (id, email, nome, role)
+  values (
+    new.id,
+    new.email,
+    coalesce(new.raw_user_meta_data ->> 'nome', split_part(new.email, '@', 1)),
+    case when exists (select 1 from public.usuarios) then 'vendedor' else 'administrador' end
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
