@@ -1276,3 +1276,437 @@ as $$
   );
 $$;
 grant execute on function public.dashboard_financeiro() to authenticated;
+
+-- ============================================================================
+-- PARTE 10 — Comissão de vendedores (Fase 3 do módulo financeiro)
+-- ----------------------------------------------------------------------------
+-- Não existe cadastro separado de vendedor: quem vende é o mesmo usuário que
+-- entra no painel (tabela usuarios), então a configuração de comissão e a
+-- meta ficam nele. A comissão em si é uma linha em "comissoes", ligada
+-- opcionalmente ao veículo vendido e ao lançamento de saída gerado quando
+-- ela é paga.
+-- Diferente do resto do Financeiro, aqui o vendedor TEM acesso — mas só às
+-- próprias comissões, nunca às dos colegas nem a qualquer outro dado.
+-- ============================================================================
+
+alter table usuarios add column if not exists comissao_tipo text not null default 'percentual';
+alter table usuarios add column if not exists comissao_valor numeric(12, 2) not null default 0;
+alter table usuarios add column if not exists meta_mensal numeric(12, 2) not null default 0;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'usuarios_comissao_tipo_valido') then
+    alter table usuarios add constraint usuarios_comissao_tipo_valido check (comissao_tipo in ('percentual', 'fixo'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'usuarios_comissao_valor_valido') then
+    alter table usuarios add constraint usuarios_comissao_valor_valido check (comissao_valor >= 0);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'usuarios_meta_valida') then
+    alter table usuarios add constraint usuarios_meta_valida check (meta_mensal >= 0);
+  end if;
+end $$;
+
+create table if not exists comissoes (
+  id uuid primary key default gen_random_uuid(),
+  vendedor_id uuid not null references usuarios (id) on delete cascade,
+  veiculo_id uuid references veiculos (id) on delete set null,
+  descricao text not null,
+  valor_base numeric(12, 2) not null default 0 check (valor_base >= 0),
+  tipo_calculo text not null default 'percentual' check (tipo_calculo in ('percentual', 'fixo')),
+  percentual numeric(5, 2) check (percentual is null or (percentual >= 0 and percentual <= 100)),
+  valor numeric(12, 2) not null check (valor >= 0),
+  status text not null default 'pendente' check (status in ('pendente', 'paga', 'cancelada')),
+  data_referencia date not null default current_date,
+  data_pagamento date,
+  lancamento_id uuid references lancamentos_financeiros (id) on delete set null,
+  observacoes text,
+  updated_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_comissoes_vendedor on comissoes (vendedor_id);
+create index if not exists idx_comissoes_status on comissoes (status);
+create index if not exists idx_comissoes_referencia on comissoes (data_referencia desc);
+create index if not exists idx_comissoes_veiculo on comissoes (veiculo_id);
+create index if not exists idx_comissoes_lancamento on comissoes (lancamento_id);
+
+alter table comissoes enable row level security;
+
+-- Leitura: gerente/administrador veem tudo; vendedor vê só as próprias.
+drop policy if exists "comissoes_select" on comissoes;
+create policy "comissoes_select" on comissoes for select
+  using (
+    (select public.current_user_role()) in ('gerente', 'administrador')
+    or vendedor_id = (select auth.uid())
+  );
+-- Escrita: só gerente/administrador — vendedor não cria nem edita a própria comissão.
+drop policy if exists "comissoes_insert" on comissoes;
+create policy "comissoes_insert" on comissoes for insert
+  with check ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "comissoes_update" on comissoes;
+create policy "comissoes_update" on comissoes for update
+  using ((select public.current_user_role()) in ('gerente', 'administrador'))
+  with check ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "comissoes_delete" on comissoes;
+create policy "comissoes_delete" on comissoes for delete
+  using ((select public.current_user_role()) = 'administrador');
+
+-- Auditoria das comissões, no mesmo formato do ledger.
+create or replace function public.log_comissao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text := auth.jwt() ->> 'email';
+begin
+  if TG_OP = 'INSERT' then
+    insert into public.logs_acoes (usuario_id, usuario_email, acao, entidade, entidade_id, detalhes)
+    values (auth.uid(), v_email, 'criar', 'comissao', NEW.id,
+      jsonb_build_object('resumo', 'registrou uma comissão', 'descricao', NEW.descricao, 'valor_novo', NEW.valor));
+    return NEW;
+  elsif TG_OP = 'UPDATE' then
+    insert into public.logs_acoes (usuario_id, usuario_email, acao, entidade, entidade_id, detalhes)
+    values (auth.uid(), v_email, 'editar', 'comissao', NEW.id,
+      jsonb_build_object('resumo', 'alterou uma comissão', 'descricao', NEW.descricao,
+        'valor_anterior', OLD.valor, 'valor_novo', NEW.valor,
+        'status_anterior', OLD.status, 'status_novo', NEW.status));
+    return NEW;
+  elsif TG_OP = 'DELETE' then
+    insert into public.logs_acoes (usuario_id, usuario_email, acao, entidade, entidade_id, detalhes)
+    values (auth.uid(), v_email, 'excluir', 'comissao', OLD.id,
+      jsonb_build_object('resumo', 'excluiu uma comissão', 'descricao', OLD.descricao, 'valor_anterior', OLD.valor));
+    return OLD;
+  end if;
+  return null;
+end;
+$$;
+revoke execute on function public.log_comissao() from public, anon, authenticated;
+
+drop trigger if exists trg_log_comissao on comissoes;
+create trigger trg_log_comissao
+  after insert or update or delete on comissoes
+  for each row execute function public.log_comissao();
+
+-- ----------------------------------------------------------------------------
+-- pagar_comissao — marca a comissão como paga E gera a despesa correspondente
+-- no ledger (categoria "Funcionários"), já quitada pelo mesmo caminho de
+-- qualquer outra baixa. Assim o dinheiro que sai pra comissão aparece no
+-- fluxo de caixa em vez de ficar só num módulo à parte.
+-- ----------------------------------------------------------------------------
+create or replace function public.pagar_comissao(
+  p_id uuid,
+  p_data date default current_date,
+  p_forma_pagamento text default null
+)
+returns comissoes
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_com comissoes;
+  v_lanc_id uuid;
+  v_categoria_id uuid;
+  v_nome text;
+begin
+  select * into v_com from comissoes where id = p_id for update;
+  if v_com.id is null then
+    raise exception 'Comissão não encontrada.';
+  end if;
+  if v_com.status = 'paga' then
+    raise exception 'Esta comissão já foi paga.';
+  end if;
+  if v_com.status = 'cancelada' then
+    raise exception 'Esta comissão está cancelada.';
+  end if;
+
+  select nome into v_nome from usuarios where id = v_com.vendedor_id;
+  select id into v_categoria_id from categorias_financeiras
+    where tipo = 'saida' and nome = 'Funcionários' and categoria_pai_id is null limit 1;
+
+  insert into lancamentos_financeiros (tipo, descricao, categoria_id, valor, data_lancamento, status, origem, veiculo_id, responsavel_id)
+  values ('saida', 'Comissão — ' || coalesce(v_nome, 'vendedor') || ' — ' || v_com.descricao,
+          v_categoria_id, v_com.valor, p_data, 'pendente', 'venda', v_com.veiculo_id, v_com.vendedor_id)
+  returning id into v_lanc_id;
+
+  perform public.registrar_pagamento(v_lanc_id, v_com.valor, p_data, p_forma_pagamento, 'Pagamento de comissão');
+
+  update comissoes
+  set status = 'paga', data_pagamento = p_data, lancamento_id = v_lanc_id, updated_at = now()
+  where id = p_id
+  returning * into v_com;
+
+  return v_com;
+end;
+$$;
+grant execute on function public.pagar_comissao(uuid, date, text) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- Configuração de comissão: quem pode alterar
+-- ----------------------------------------------------------------------------
+-- A política usuarios_update_self só deixa o próprio usuário (ou um
+-- administrador) escrever na linha. Isso criava dois problemas assim que a
+-- configuração de comissão passou a morar em "usuarios":
+--   1) um gerente gravando direto na tabela casava com zero linhas — a tela
+--      dizia "salvo" sem ter salvo nada;
+--   2) um vendedor conseguia alterar a própria comissão/meta chamando a API
+--      direto, já que o gatilho existente só protegia a coluna "role".
+-- O gatilho abaixo fecha o caminho direto e a função faz a escrita conferindo
+-- o papel de quem chamou, sem precisar afrouxar a política geral da tabela.
+-- ----------------------------------------------------------------------------
+create or replace function public.prevent_comissao_self_edit()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if (new.comissao_tipo is distinct from old.comissao_tipo
+      or new.comissao_valor is distinct from old.comissao_valor
+      or new.meta_mensal is distinct from old.meta_mensal)
+     and coalesce(public.current_user_role(), '') not in ('administrador', 'gerente') then
+    raise exception 'Apenas gerentes e administradores podem alterar a configuração de comissão.';
+  end if;
+  return new;
+end;
+$$;
+revoke execute on function public.prevent_comissao_self_edit() from public, anon, authenticated;
+
+drop trigger if exists trg_prevent_comissao_self_edit on usuarios;
+create trigger trg_prevent_comissao_self_edit
+  before update on usuarios
+  for each row execute function public.prevent_comissao_self_edit();
+
+create or replace function public.definir_comissao_vendedor(
+  p_user_id uuid,
+  p_tipo text,
+  p_valor numeric,
+  p_meta numeric
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if coalesce(public.current_user_role(), '') not in ('administrador', 'gerente') then
+    raise exception 'Apenas gerentes e administradores podem alterar a configuração de comissão.';
+  end if;
+  if p_tipo not in ('percentual', 'fixo') then
+    raise exception 'Tipo de comissão inválido.';
+  end if;
+  if coalesce(p_valor, 0) < 0 or coalesce(p_meta, 0) < 0 then
+    raise exception 'Valores de comissão e meta não podem ser negativos.';
+  end if;
+  if p_tipo = 'percentual' and coalesce(p_valor, 0) > 100 then
+    raise exception 'O percentual de comissão não pode passar de 100%%.';
+  end if;
+
+  update usuarios
+  set comissao_tipo = p_tipo,
+      comissao_valor = coalesce(p_valor, 0),
+      meta_mensal = coalesce(p_meta, 0)
+  where id = p_user_id;
+
+  if not found then
+    raise exception 'Usuário não encontrado.';
+  end if;
+end;
+$$;
+grant execute on function public.definir_comissao_vendedor(uuid, text, numeric, numeric) to authenticated;
+
+-- ============================================================================
+-- PARTE 11 — Relatórios
+-- ----------------------------------------------------------------------------
+-- Uma função só devolve qualquer relatório no formato
+-- {titulo, colunas, linhas, resumo}, para a tela e os exportadores
+-- (CSV/Excel/PDF) tratarem todos igual, sem código por tipo de relatório.
+-- Relatórios detalhados são limitados a 5000 linhas — acima disso o resumo
+-- avisa que houve corte, em vez de devolver um arquivo silenciosamente
+-- incompleto.
+-- ============================================================================
+create or replace function public.relatorio_financeiro(
+  p_tipo text,
+  p_inicio date default null,
+  p_fim date default null
+)
+returns jsonb
+language plpgsql
+security invoker
+stable
+set search_path = public
+as $$
+declare
+  v_ini date := coalesce(p_inicio, '1900-01-01'::date);
+  v_fim date := coalesce(p_fim, '2999-12-31'::date);
+  v_colunas jsonb;
+  v_linhas jsonb;
+  v_resumo jsonb := '{}'::jsonb;
+  v_titulo text;
+  v_limite constant int := 5000;
+  v_total_disponivel bigint := 0;
+begin
+  if p_tipo in ('fluxo-caixa', 'receitas', 'despesas') then
+    v_titulo := case p_tipo when 'receitas' then 'Receitas' when 'despesas' then 'Despesas' else 'Fluxo de caixa' end;
+    v_colunas := jsonb_build_array('Data', 'Descrição', 'Categoria', 'Tipo', 'Cliente/Fornecedor', 'Valor', 'Pago', 'Em aberto', 'Status');
+
+    select count(*) into v_total_disponivel
+    from lancamentos_financeiros l
+    where l.data_lancamento between v_ini and v_fim
+      and (p_tipo = 'fluxo-caixa' or l.tipo = case p_tipo when 'receitas' then 'entrada' else 'saida' end);
+
+    select coalesce(jsonb_agg(linha order by ord), '[]'::jsonb) into v_linhas from (
+      select row_number() over (order by l.data_lancamento desc, l.created_at desc) as ord,
+        jsonb_build_array(
+          to_char(l.data_lancamento, 'DD/MM/YYYY'), l.descricao, coalesce(cf.nome, '—'),
+          case l.tipo when 'entrada' then 'Entrada' else 'Saída' end,
+          coalesce(cl.nome, fo.nome, '—'), l.valor, l.valor_pago, l.saldo, initcap(l.status)
+        ) as linha
+      from lancamentos_financeiros l
+      left join categorias_financeiras cf on cf.id = l.categoria_id
+      left join clientes cl on cl.id = l.cliente_id
+      left join fornecedores fo on fo.id = l.fornecedor_id
+      where l.data_lancamento between v_ini and v_fim
+        and (p_tipo = 'fluxo-caixa' or l.tipo = case p_tipo when 'receitas' then 'entrada' else 'saida' end)
+      order by l.data_lancamento desc, l.created_at desc
+      limit v_limite
+    ) t;
+
+    select jsonb_build_object(
+      'Total lançado', coalesce(sum(l.valor), 0),
+      'Total baixado', coalesce(sum(l.valor_pago), 0),
+      'Em aberto', coalesce(sum(l.saldo), 0)
+    ) into v_resumo
+    from lancamentos_financeiros l
+    where l.data_lancamento between v_ini and v_fim
+      and (p_tipo = 'fluxo-caixa' or l.tipo = case p_tipo when 'receitas' then 'entrada' else 'saida' end);
+
+  elsif p_tipo = 'lucro' then
+    v_titulo := 'Lucro por mês';
+    v_colunas := jsonb_build_array('Mês', 'Receitas', 'Despesas', 'Lucro');
+    select coalesce(jsonb_agg(jsonb_build_array(mes, entradas, saidas, entradas - saidas) order by ord), '[]'::jsonb)
+    into v_linhas
+    from (
+      select to_char(date_trunc('month', p.data_pagamento), 'MM/YYYY') as mes,
+             date_trunc('month', p.data_pagamento) as ord,
+             coalesce(sum(p.valor) filter (where l.tipo = 'entrada'), 0) as entradas,
+             coalesce(sum(p.valor) filter (where l.tipo = 'saida'), 0) as saidas
+      from pagamentos_financeiros p
+      join lancamentos_financeiros l on l.id = p.lancamento_id
+      where p.data_pagamento between v_ini and v_fim and l.status <> 'cancelado'
+      group by date_trunc('month', p.data_pagamento)
+    ) t;
+    select jsonb_build_object(
+      'Receitas', coalesce(sum(p.valor) filter (where l.tipo = 'entrada'), 0),
+      'Despesas', coalesce(sum(p.valor) filter (where l.tipo = 'saida'), 0),
+      'Lucro', coalesce(sum(p.valor) filter (where l.tipo = 'entrada'), 0) - coalesce(sum(p.valor) filter (where l.tipo = 'saida'), 0)
+    ) into v_resumo
+    from pagamentos_financeiros p
+    join lancamentos_financeiros l on l.id = p.lancamento_id
+    where p.data_pagamento between v_ini and v_fim and l.status <> 'cancelado';
+
+  elsif p_tipo = 'inadimplentes' then
+    v_titulo := 'Clientes inadimplentes';
+    v_colunas := jsonb_build_array('Cliente', 'Telefone', 'Contas vencidas', 'Total em aberto', 'Vencimento mais antigo');
+    select coalesce(jsonb_agg(jsonb_build_array(nome, telefone, qtd, total, venc) order by total desc), '[]'::jsonb)
+    into v_linhas
+    from (
+      select coalesce(c.nome, 'Sem cliente vinculado') as nome, coalesce(c.telefone, '—') as telefone,
+             count(*) as qtd, sum(l.saldo) as total, to_char(min(l.data_vencimento), 'DD/MM/YYYY') as venc
+      from lancamentos_financeiros l
+      left join clientes c on c.id = l.cliente_id
+      where l.tipo = 'entrada' and l.status = 'pendente' and l.data_vencimento < current_date
+      group by c.nome, c.telefone
+    ) t;
+    select jsonb_build_object(
+      'Contas vencidas', count(*),
+      'Total em aberto', coalesce(sum(saldo), 0)
+    ) into v_resumo
+    from lancamentos_financeiros
+    where tipo = 'entrada' and status = 'pendente' and data_vencimento < current_date;
+
+  elsif p_tipo in ('despesas-categoria', 'receitas-categoria') then
+    v_titulo := case p_tipo when 'receitas-categoria' then 'Receitas por categoria' else 'Despesas por categoria' end;
+    v_colunas := jsonb_build_array('Categoria', 'Lançamentos', 'Total baixado');
+    select coalesce(jsonb_agg(jsonb_build_array(categoria, qtd, total) order by total desc), '[]'::jsonb)
+    into v_linhas
+    from (
+      select coalesce(cf.nome, 'Sem categoria') as categoria, count(*) as qtd, sum(p.valor) as total
+      from pagamentos_financeiros p
+      join lancamentos_financeiros l on l.id = p.lancamento_id
+      left join categorias_financeiras cf on cf.id = l.categoria_id
+      where p.data_pagamento between v_ini and v_fim
+        and l.status <> 'cancelado'
+        and l.tipo = case p_tipo when 'receitas-categoria' then 'entrada' else 'saida' end
+      group by cf.nome
+    ) t;
+    select jsonb_build_object('Total', coalesce(sum(p.valor), 0)) into v_resumo
+    from pagamentos_financeiros p
+    join lancamentos_financeiros l on l.id = p.lancamento_id
+    where p.data_pagamento between v_ini and v_fim
+      and l.status <> 'cancelado'
+      and l.tipo = case p_tipo when 'receitas-categoria' then 'entrada' else 'saida' end;
+
+  elsif p_tipo = 'vendas-periodo' then
+    v_titulo := 'Vendas por período';
+    v_colunas := jsonb_build_array('Data da venda', 'Veículo', 'Ano', 'Preço', 'Registrado por');
+    -- A data da venda vem da trilha de auditoria (ação "vender"), que é o
+    -- único registro de QUANDO a venda aconteceu — a tabela de veículos só
+    -- guarda o estado atual.
+    select coalesce(jsonb_agg(jsonb_build_array(data_venda, veiculo, ano, preco, quem) order by ord desc), '[]'::jsonb)
+    into v_linhas
+    from (
+      select la.created_at as ord, to_char(la.created_at, 'DD/MM/YYYY') as data_venda,
+             coalesce(m.nome || ' ' || v.modelo, 'Veículo removido') as veiculo,
+             v.ano as ano, v.preco as preco, coalesce(la.usuario_email, '—') as quem
+      from logs_acoes la
+      left join veiculos v on v.id = la.entidade_id
+      left join marcas m on m.id = v.marca_id
+      where la.entidade = 'veiculo' and la.acao = 'vender'
+        and la.created_at::date between v_ini and v_fim
+      limit v_limite
+    ) t;
+    select jsonb_build_object('Veículos vendidos', count(*)) into v_resumo
+    from logs_acoes
+    where entidade = 'veiculo' and acao = 'vender' and created_at::date between v_ini and v_fim;
+
+  elsif p_tipo = 'comissoes' then
+    v_titulo := 'Comissões';
+    v_colunas := jsonb_build_array('Referência', 'Vendedor', 'Descrição', 'Base', 'Cálculo', 'Valor', 'Status', 'Pagamento');
+    select coalesce(jsonb_agg(jsonb_build_array(ref, vendedor, descricao, base, calculo, valor, status, pgto) order by ord desc), '[]'::jsonb)
+    into v_linhas
+    from (
+      select c.data_referencia as ord, to_char(c.data_referencia, 'DD/MM/YYYY') as ref,
+             coalesce(u.nome, u.email, '—') as vendedor, c.descricao as descricao,
+             c.valor_base as base,
+             case c.tipo_calculo when 'percentual' then coalesce(c.percentual, 0)::text || '%' else 'Valor fixo' end as calculo,
+             c.valor as valor, initcap(c.status) as status,
+             coalesce(to_char(c.data_pagamento, 'DD/MM/YYYY'), '—') as pgto
+      from comissoes c
+      left join usuarios u on u.id = c.vendedor_id
+      where c.data_referencia between v_ini and v_fim
+      limit v_limite
+    ) t;
+    select jsonb_build_object(
+      'Total', coalesce(sum(valor), 0),
+      'Pagas', coalesce(sum(valor) filter (where status = 'paga'), 0),
+      'Pendentes', coalesce(sum(valor) filter (where status = 'pendente'), 0)
+    ) into v_resumo
+    from comissoes where data_referencia between v_ini and v_fim;
+
+  else
+    raise exception 'Relatório desconhecido: %', p_tipo;
+  end if;
+
+  if v_total_disponivel > v_limite then
+    v_resumo := v_resumo || jsonb_build_object(
+      'Aviso', 'Mostrando as ' || v_limite || ' linhas mais recentes de ' || v_total_disponivel || ' no período. Reduza o intervalo de datas para ver o restante.'
+    );
+  end if;
+
+  return jsonb_build_object('titulo', v_titulo, 'colunas', v_colunas, 'linhas', coalesce(v_linhas, '[]'::jsonb), 'resumo', v_resumo);
+end;
+$$;
+grant execute on function public.relatorio_financeiro(text, date, date) to authenticated;

@@ -938,6 +938,223 @@ const HM = (function () {
     return new Date(isoDate + 'T12:00:00').toLocaleDateString('pt-BR');
   }
 
+  // ── COMISSÕES ──
+  // Vendedor é o próprio usuário do painel (tabela usuarios), não um cadastro
+  // à parte. A RLS deixa o vendedor ver só as comissões dele; criar, editar e
+  // pagar continua restrito a gerente/administrador.
+
+  function mapComissaoRow(row) {
+    return {
+      id: row.id,
+      vendedorId: row.vendedor_id,
+      vendedorNome: row.vendedor?.nome || row.vendedor?.email || '—',
+      veiculoId: row.veiculo_id,
+      descricao: row.descricao,
+      valorBase: Number(row.valor_base) || 0,
+      tipoCalculo: row.tipo_calculo,
+      percentual: row.percentual == null ? null : Number(row.percentual),
+      valor: Number(row.valor) || 0,
+      status: row.status,
+      dataReferencia: row.data_referencia,
+      dataPagamento: row.data_pagamento,
+      lancamentoId: row.lancamento_id,
+      observacoes: row.observacoes,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /** Regra de cálculo compartilhada entre a tela e o que é gravado, pra
+   * comissão exibida e comissão salva nunca divergirem. */
+  function calcularComissao({ tipoCalculo, valorBase, percentual, valorFixo }) {
+    if (tipoCalculo === 'fixo') return Math.max(0, Number(valorFixo) || 0);
+    const base = Number(valorBase) || 0;
+    const pct = Number(percentual) || 0;
+    return Math.round(base * (pct / 100) * 100) / 100;
+  }
+
+  async function getComissoes({ page = 0, pageSize = 25, search = '', vendedorId = '', status = '', dataInicio = '', dataFim = '' } = {}) {
+    let query = supabaseClient
+      .from('comissoes')
+      .select('*, vendedor:usuarios(nome, email)', { count: 'exact' })
+      .order('data_referencia', { ascending: false });
+
+    if (search) query = query.ilike('descricao', `%${search}%`);
+    if (vendedorId) query = query.eq('vendedor_id', vendedorId);
+    if (status) query = query.eq('status', status);
+    if (dataInicio) query = query.gte('data_referencia', dataInicio);
+    if (dataFim) query = query.lte('data_referencia', dataFim);
+
+    query = query.range(page * pageSize, page * pageSize + pageSize - 1);
+    const { data, error, count } = await query;
+    if (error) throw error;
+    return { rows: data.map(mapComissaoRow), total: count || 0, page, pageSize };
+  }
+
+  function comissaoPayload(input) {
+    return {
+      vendedor_id: input.vendedorId,
+      veiculo_id: input.veiculoId || null,
+      descricao: input.descricao,
+      valor_base: typeof input.valorBase === 'number' ? input.valorBase : parsePrice(input.valorBase || 0),
+      tipo_calculo: input.tipoCalculo || 'percentual',
+      percentual: input.tipoCalculo === 'fixo' ? null : (Number(input.percentual) || 0),
+      valor: input.valor,
+      status: input.status || 'pendente',
+      data_referencia: input.dataReferencia || new Date().toISOString().slice(0, 10),
+      observacoes: input.observacoes || null,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  async function createComissao(input) {
+    const row = unwrap(await supabaseClient.from('comissoes').insert(comissaoPayload(input)).select('id').single());
+    return row.id;
+  }
+
+  async function updateComissao(id, input) {
+    let query = supabaseClient.from('comissoes').update(comissaoPayload(input)).eq('id', id);
+    if (input.expectedUpdatedAt) query = query.eq('updated_at', input.expectedUpdatedAt);
+    const { data, error } = await query.select('id');
+    if (error) throw error;
+    if (input.expectedUpdatedAt && (!data || !data.length)) {
+      throw new ConcurrencyError('Esta comissão foi alterada por outra pessoa enquanto você editava. Recarregue a lista e tente novamente.');
+    }
+  }
+
+  async function deleteComissao(id) {
+    unwrap(await supabaseClient.from('comissoes').delete().eq('id', id));
+  }
+
+  /** Paga a comissão e gera, na mesma transação, a despesa correspondente no
+   * fluxo de caixa — o dinheiro que sai pra comissão não fica só num módulo
+   * à parte. */
+  async function pagarComissao(id, { dataPagamento, formaPagamento } = {}) {
+    const { data, error } = await supabaseClient.rpc('pagar_comissao', {
+      p_id: id,
+      p_data: dataPagamento || new Date().toISOString().slice(0, 10),
+      p_forma_pagamento: formaPagamento || null,
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  /** Usuários que podem receber comissão, com a configuração padrão de cada
+   * um (tipo, valor/percentual e meta mensal). */
+  async function getVendedores() {
+    const rows = unwrap(await supabaseClient
+      .from('usuarios')
+      .select('id, nome, email, role, comissao_tipo, comissao_valor, meta_mensal')
+      .order('nome', { ascending: true }));
+    return rows.map(u => ({
+      id: u.id,
+      nome: u.nome || u.email || '—',
+      email: u.email,
+      role: u.role,
+      comissaoTipo: u.comissao_tipo,
+      comissaoValor: Number(u.comissao_valor) || 0,
+      metaMensal: Number(u.meta_mensal) || 0,
+    }));
+  }
+
+  /** Passa por RPC em vez de UPDATE direto: a política de "usuarios" só
+   * deixa cada um escrever na própria linha (ou o administrador em
+   * qualquer uma), então um gerente gravando direto na tabela casaria com
+   * zero linhas e a tela diria "salvo" sem ter salvo nada. A função confere
+   * o papel de quem chamou antes de gravar. */
+  async function updateConfigComissao(userId, { comissaoTipo, comissaoValor, metaMensal }) {
+    const { error } = await supabaseClient.rpc('definir_comissao_vendedor', {
+      p_user_id: userId,
+      p_tipo: comissaoTipo,
+      p_valor: comissaoValor,
+      p_meta: metaMensal,
+    });
+    if (error) throw error;
+    await logAction('papel', 'usuario', userId, { resumo: 'ajustou a configuração de comissão de um vendedor' });
+  }
+
+  // ── RELATÓRIOS ──
+
+  /** Todos os relatórios voltam no mesmo formato {titulo, colunas, linhas,
+   * resumo}, agregados no banco — a tela e os exportadores tratam qualquer
+   * relatório do mesmo jeito, sem código por tipo. */
+  async function getRelatorio(tipo, dataInicio, dataFim) {
+    const { data, error } = await supabaseClient.rpc('relatorio_financeiro', {
+      p_tipo: tipo,
+      p_inicio: dataInicio || null,
+      p_fim: dataFim || null,
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  // ── BACKUP FINANCEIRO ──
+
+  /** Exporta o módulo financeiro inteiro em JSON. Separado do backup do
+   * estoque porque são responsabilidades diferentes — e porque dado
+   * financeiro costuma ser exportado num ritmo próprio (fechamento). */
+  async function exportBackupFinanceiro() {
+    const [categorias, clientes, fornecedores, lancamentos, pagamentos, comissoes] = await Promise.all([
+      supabaseClient.from('categorias_financeiras').select('*').order('created_at'),
+      supabaseClient.from('clientes').select('*').order('created_at'),
+      supabaseClient.from('fornecedores').select('*').order('created_at'),
+      supabaseClient.from('lancamentos_financeiros').select('*').order('created_at'),
+      supabaseClient.from('pagamentos_financeiros').select('*').order('created_at'),
+      supabaseClient.from('comissoes').select('*').order('created_at'),
+    ]);
+    [categorias, clientes, fornecedores, lancamentos, pagamentos, comissoes].forEach(unwrap);
+
+    await logAction('exportar', 'backup', null, { resumo: 'exportou um backup financeiro' });
+    return {
+      versao: 1,
+      tipo: 'financeiro',
+      exportado_em: new Date().toISOString(),
+      categorias_financeiras: categorias.data,
+      clientes: clientes.data,
+      fornecedores: fornecedores.data,
+      lancamentos_financeiros: lancamentos.data,
+      pagamentos_financeiros: pagamentos.data,
+      comissoes: comissoes.data,
+    };
+  }
+
+  /**
+   * Restaura um backup financeiro preservando os ids originais (upsert), pra
+   * os vínculos entre lançamento, pagamento e comissão continuarem válidos.
+   * É uma restauração aditiva: registros que existem são atualizados, os que
+   * não existem são criados — nada é apagado.
+   */
+  async function restoreBackupFinanceiro(backup, onProgress) {
+    const log = (msg) => { if (onProgress) onProgress(msg); };
+    if (backup.tipo !== 'financeiro') {
+      throw new Error('Este arquivo não é um backup financeiro.');
+    }
+
+    // A ordem importa: cada etapa depende das anteriores por chave estrangeira.
+    const etapas = [
+      ['categorias_financeiras', 'Categorias'],
+      ['clientes', 'Clientes'],
+      ['fornecedores', 'Fornecedores'],
+      ['lancamentos_financeiros', 'Lançamentos'],
+      ['pagamentos_financeiros', 'Pagamentos'],
+      ['comissoes', 'Comissões'],
+    ];
+
+    for (const [tabela, rotulo] of etapas) {
+      const linhas = backup[tabela] || [];
+      if (!linhas.length) { log(`— ${rotulo}: nada no arquivo.`); continue; }
+      try {
+        // "saldo" é coluna gerada pelo banco: não pode ser enviada de volta.
+        const limpas = linhas.map(({ saldo, ...resto }) => resto);
+        const { error } = await supabaseClient.from(tabela).upsert(limpas, { onConflict: 'id' });
+        if (error) throw error;
+        log(`✓ ${rotulo}: ${linhas.length} registro(s) restaurado(s).`);
+      } catch (err) {
+        log(`✗ ${rotulo}: ${err.message}`);
+      }
+    }
+    await logAction('atualizar', 'backup', null, { resumo: 'restaurou um backup financeiro' });
+  }
+
   // ── INTERESSE POR VEÍCULO (visualizações e cliques em WhatsApp) ──
 
   /**
@@ -1211,6 +1428,19 @@ const HM = (function () {
     ensureFornecedor,
     getDashboardFinanceiro,
     formatDateBR,
+    // comissões
+    getComissoes,
+    createComissao,
+    updateComissao,
+    deleteComissao,
+    pagarComissao,
+    calcularComissao,
+    getVendedores,
+    updateConfigComissao,
+    // relatórios e backup financeiro
+    getRelatorio,
+    exportBackupFinanceiro,
+    restoreBackupFinanceiro,
     // interesse por veículo
     logInteresse,
     getInteresseVeiculos,

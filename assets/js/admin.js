@@ -156,6 +156,7 @@
       if (el.id.startsWith('cfg-')) el.disabled = !podeConfig;
     });
     document.getElementById('backupSection').hidden = !podeConfig;
+    document.getElementById('backupFinSection').hidden = !podeConfig;
   }
 
   /* ── NAVEGAÇÃO ── */
@@ -164,6 +165,7 @@
     'fin-dashboard': 'Dashboard Financeiro', 'fin-fluxo': 'Fluxo de Caixa',
     'fin-receber': 'Contas a Receber', 'fin-pagar': 'Contas a Pagar',
     'fin-despesas': 'Despesas', 'fin-receitas': 'Receitas',
+    'fin-comissoes': 'Comissões', 'fin-relatorios': 'Relatórios',
     usuarios: 'Usuários', logs: 'Logs', configuracoes: 'Configurações',
   };
   document.querySelectorAll('.nav-item[data-page]').forEach(btn => {
@@ -181,6 +183,7 @@
     if (page === 'logs') loadLogsPage(true);
     if (page === 'fin-dashboard') renderDashboardFinanceiro();
     if (FIN_VIEWS[page]) abrirFinView(page);
+    if (page === 'fin-comissoes') abrirComissoes();
   }
 
   const sidebar = document.getElementById('sidebar');
@@ -1339,6 +1342,505 @@
     }
   }
 
+  /* ══════════════════════════════════════════════════════════════════════
+   * COMISSÕES
+   * ------------------------------------------------------------------------
+   * Única página do Financeiro que o vendedor enxerga — e só com as
+   * comissões dele (garantido pela RLS, não só escondendo botão). Criar,
+   * editar, pagar e configurar continuam restritos a gerente/administrador.
+   * ════════════════════════════════════════════════════════════════════ */
+
+  let comissaoState = { page: 0, pageSize: 25, search: '', vendedorId: '', status: '', dataInicio: '', dataFim: '', rows: [], total: 0 };
+  let comissaoRequestToken = 0;
+  let comissaoSearchDebounce;
+  let vendedoresCache = [];
+
+  const COMISSAO_STATUS_BADGE = {
+    paga: '<span class="badge badge-ativo">Paga</span>',
+    pendente: '<span class="badge badge-negociando">Pendente</span>',
+    cancelada: '<span class="badge badge-inativo">Cancelada</span>',
+  };
+
+  function podeGerirComissoes() { return roleAtLeast('gerente'); }
+
+  document.getElementById('comSearch').addEventListener('input', e => {
+    clearTimeout(comissaoSearchDebounce);
+    const valor = e.target.value;
+    comissaoSearchDebounce = setTimeout(() => { comissaoState.search = valor; loadComissoesPage(true); }, 250);
+  });
+  document.getElementById('comFilterVendedor').addEventListener('change', e => { comissaoState.vendedorId = e.target.value; loadComissoesPage(true); });
+  document.getElementById('comFilterStatus').addEventListener('change', e => { comissaoState.status = e.target.value; loadComissoesPage(true); });
+  document.getElementById('comFilterInicio').addEventListener('change', e => { comissaoState.dataInicio = e.target.value; loadComissoesPage(true); });
+  document.getElementById('comFilterFim').addEventListener('change', e => { comissaoState.dataFim = e.target.value; loadComissoesPage(true); });
+  document.getElementById('comissaoLoadMoreBtn').addEventListener('click', () => loadComissoesPage(false));
+
+  async function abrirComissoes() {
+    const gerir = podeGerirComissoes();
+    document.getElementById('newComissaoBtn').hidden = !gerir;
+    document.getElementById('comFilterVendedor').hidden = !gerir;
+    document.getElementById('comissaoConfigWrap').hidden = !gerir;
+    document.getElementById('comissaoHint').textContent = gerir
+      ? 'Cada comissão pode ser um percentual sobre o valor da venda ou um valor fixo. Ao marcar como paga, o sistema gera automaticamente a despesa correspondente no fluxo de caixa.'
+      : 'Estas são as suas comissões. Só gerentes e administradores podem criar, alterar ou pagar comissões.';
+
+    if (gerir && !vendedoresCache.length) await carregarVendedores();
+    await loadComissoesPage(true);
+    if (gerir) renderConfigComissaoTable();
+  }
+
+  async function carregarVendedores() {
+    try {
+      vendedoresCache = await HM.getVendedores();
+      const opcoes = vendedoresCache.map(v => `<option value="${v.id}">${escapeHtml(v.nome)}</option>`).join('');
+      document.getElementById('comFilterVendedor').innerHTML = '<option value="">Todos os vendedores</option>' + opcoes;
+      document.getElementById('kVendedor').innerHTML = opcoes;
+    } catch (err) {
+      console.error('[admin] Falha ao carregar vendedores.', err);
+    }
+  }
+
+  async function loadComissoesPage(reset) {
+    const requestToken = ++comissaoRequestToken;
+    const pageToLoad = reset ? 0 : comissaoState.page + 1;
+    const btn = document.getElementById('comissaoLoadMoreBtn');
+    btn.disabled = true;
+    try {
+      const { rows, total } = await HM.getComissoes({
+        page: pageToLoad, pageSize: comissaoState.pageSize, search: comissaoState.search,
+        vendedorId: comissaoState.vendedorId, status: comissaoState.status,
+        dataInicio: comissaoState.dataInicio, dataFim: comissaoState.dataFim,
+      });
+      if (requestToken !== comissaoRequestToken) return;
+      comissaoState.page = pageToLoad;
+      comissaoState.rows = reset ? rows : comissaoState.rows.concat(rows);
+      comissaoState.total = total;
+      renderComissoesTable();
+    } catch (err) {
+      if (requestToken !== comissaoRequestToken) return;
+      console.error('[admin] Falha ao carregar comissões.', err);
+      toast('Não foi possível carregar as comissões.', 'error');
+    } finally {
+      if (requestToken === comissaoRequestToken) btn.disabled = false;
+    }
+  }
+
+  function renderComissoesTable() {
+    const linhas = comissaoState.rows;
+    const tbody = document.getElementById('comissaoTableBody');
+    const gerir = podeGerirComissoes();
+
+    if (!linhas.length) {
+      tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p>Nenhuma comissão encontrada.</p></div></td></tr>`;
+    } else {
+      const podeExcluir = roleAtLeast('administrador');
+      tbody.innerHTML = linhas.map(c => `
+        <tr>
+          <td class="fin-td-nowrap">${HM.formatDateBR(c.dataReferencia)}</td>
+          <td><div class="td-name">${escapeHtml(c.vendedorNome)}</div></td>
+          <td>${escapeHtml(c.descricao)}</td>
+          <td class="fin-td-muted">${c.tipoCalculo === 'percentual' ? `${c.percentual || 0}% de ${HM.formatPrice(c.valorBase)}` : 'Valor fixo'}</td>
+          <td class="fin-td-valor">${HM.formatPrice(c.valor)}</td>
+          <td>${COMISSAO_STATUS_BADGE[c.status] || c.status}</td>
+          <td>
+            <div class="actions">
+              ${gerir && c.status === 'pendente' ? `<button class="btn-icon toggle" type="button" data-com-pagar="${c.id}" data-label="${escapeHtml(c.descricao)}" aria-label="Pagar comissão de ${escapeHtml(c.descricao)}">${ICON_CHECK}</button>` : ''}
+              ${gerir ? `<button class="btn-icon edit" type="button" data-com-edit="${c.id}" aria-label="Editar ${escapeHtml(c.descricao)}">${ICON_EDIT}</button>` : ''}
+              ${gerir && podeExcluir ? `<button class="btn-icon del" type="button" data-com-del="${c.id}" data-label="${escapeHtml(c.descricao)}" aria-label="Excluir ${escapeHtml(c.descricao)}">${ICON_DEL}</button>` : ''}
+              ${!gerir ? '<span class="fin-td-muted">—</span>' : ''}
+            </div>
+          </td>
+        </tr>`).join('');
+      tbody.querySelectorAll('[data-com-edit]').forEach(b => b.addEventListener('click', () => openComissaoModal(b.dataset.comEdit, b)));
+      tbody.querySelectorAll('[data-com-del]').forEach(b => b.addEventListener('click', () => confirmDelete('comissao', b.dataset.comDel, b.dataset.label, b)));
+      tbody.querySelectorAll('[data-com-pagar]').forEach(b => b.addEventListener('click', () => pagarComissao(b.dataset.comPagar, b.dataset.label)));
+    }
+
+    const totais = linhas.reduce((acc, c) => {
+      if (c.status === 'paga') acc.pagas += c.valor;
+      else if (c.status === 'pendente') acc.pendentes += c.valor;
+      return acc;
+    }, { pagas: 0, pendentes: 0 });
+    document.getElementById('comissaoResumo').innerHTML = `
+      <div class="stat-card green"><div class="stat-card-label">Comissões pagas</div><div class="stat-card-val">${HM.formatPrice(totais.pagas)}</div><div class="stat-card-sub">nesta lista</div></div>
+      <div class="stat-card yellow"><div class="stat-card-label">Comissões pendentes</div><div class="stat-card-val">${HM.formatPrice(totais.pendentes)}</div><div class="stat-card-sub">nesta lista</div></div>`;
+
+    document.getElementById('comissaoListCount').textContent = linhas.length ? `Mostrando ${linhas.length} de ${comissaoState.total}` : '';
+    document.getElementById('comissaoLoadMoreBtn').hidden = linhas.length >= comissaoState.total;
+  }
+
+  async function pagarComissao(id, label) {
+    try {
+      await HM.pagarComissao(id);
+      await loadComissoesPage(true);
+      toast(`Comissão "${label}" paga — a despesa foi lançada no fluxo de caixa.`, 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao pagar comissão.', err);
+      toast(err.message || 'Não foi possível pagar esta comissão.', 'error');
+    }
+  }
+
+  /* ── Configuração de comissão por vendedor ── */
+  function renderConfigComissaoTable() {
+    const tbody = document.getElementById('comissaoConfigBody');
+    if (!vendedoresCache.length) {
+      tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><p>Nenhum usuário cadastrado.</p></div></td></tr>`;
+      return;
+    }
+    tbody.innerHTML = vendedoresCache.map(v => `
+      <tr>
+        <td><div class="td-name">${escapeHtml(v.nome)}</div><div class="td-sub">${escapeHtml(ROLE_LABELS[v.role] || v.role)}</div></td>
+        <td>
+          <select class="filter-select" data-cfg-tipo="${v.id}">
+            <option value="percentual" ${v.comissaoTipo === 'percentual' ? 'selected' : ''}>Percentual</option>
+            <option value="fixo" ${v.comissaoTipo === 'fixo' ? 'selected' : ''}>Valor fixo</option>
+          </select>
+        </td>
+        <td><input class="search-input fin-input-curto" data-cfg-valor="${v.id}" value="${v.comissaoValor}" inputmode="decimal"></td>
+        <td><input class="search-input fin-input-curto" data-cfg-meta="${v.id}" value="${v.metaMensal}" inputmode="decimal"></td>
+        <td><button class="btn-secondary" type="button" data-cfg-salvar="${v.id}">Salvar</button></td>
+      </tr>`).join('');
+
+    tbody.querySelectorAll('[data-cfg-salvar]').forEach(btn => btn.addEventListener('click', async () => {
+      const id = btn.dataset.cfgSalvar;
+      btn.disabled = true;
+      try {
+        await HM.updateConfigComissao(id, {
+          comissaoTipo: tbody.querySelector(`[data-cfg-tipo="${id}"]`).value,
+          comissaoValor: Number(String(tbody.querySelector(`[data-cfg-valor="${id}"]`).value).replace(',', '.')) || 0,
+          metaMensal: Number(String(tbody.querySelector(`[data-cfg-meta="${id}"]`).value).replace(',', '.')) || 0,
+        });
+        await carregarVendedores();
+        toast('Configuração de comissão atualizada.', 'success');
+      } catch (err) {
+        console.error('[admin] Falha ao salvar configuração de comissão.', err);
+        toast('Não foi possível salvar a configuração.', 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }));
+  }
+
+  /* ── Modal de comissão ── */
+  const comissaoOverlay = document.getElementById('comissaoModalOverlay');
+
+  document.getElementById('newComissaoBtn').addEventListener('click', e => openComissaoModal(null, e.currentTarget));
+  document.getElementById('comissaoModalCloseBtn').addEventListener('click', closeComissaoModal);
+  document.getElementById('comissaoCancelBtn').addEventListener('click', closeComissaoModal);
+  document.getElementById('comissaoSaveBtn').addEventListener('click', saveComissao);
+  comissaoOverlay.addEventListener('click', e => { if (e.target === e.currentTarget) closeComissaoModal(); });
+  ['kTipoCalculo', 'kValorBase', 'kPercentual', 'kValorFixo'].forEach(id => {
+    document.getElementById(id).addEventListener('input', atualizarPreviaComissao);
+    document.getElementById(id).addEventListener('change', atualizarPreviaComissao);
+  });
+  document.getElementById('kVendedor').addEventListener('change', aplicarPadraoDoVendedor);
+
+  function valoresComissaoDoFormulario() {
+    return {
+      tipoCalculo: document.getElementById('kTipoCalculo').value,
+      valorBase: HM.parsePrice(document.getElementById('kValorBase').value),
+      percentual: Number(document.getElementById('kPercentual').value) || 0,
+      valorFixo: HM.parsePrice(document.getElementById('kValorFixo').value),
+    };
+  }
+
+  /** Mostra o valor final antes de salvar, calculado pela mesma função que o
+   * salvamento usa — o que aparece na prévia é exatamente o que é gravado. */
+  function atualizarPreviaComissao() {
+    const dados = valoresComissaoDoFormulario();
+    const ehPercentual = dados.tipoCalculo === 'percentual';
+    document.getElementById('kBaseField').hidden = !ehPercentual;
+    document.getElementById('kPercentualField').hidden = !ehPercentual;
+    document.getElementById('kValorFixoField').hidden = ehPercentual;
+    document.getElementById('kPrevia').textContent = `Comissão: ${HM.formatPrice(HM.calcularComissao(dados))}`;
+  }
+
+  /** Ao escolher o vendedor, já traz a configuração padrão dele (percentual
+   * ou valor fixo) em vez de obrigar a redigitar a cada comissão. */
+  function aplicarPadraoDoVendedor() {
+    if (document.getElementById('kId').value) return;
+    const vendedor = vendedoresCache.find(v => v.id === document.getElementById('kVendedor').value);
+    if (!vendedor) return;
+    document.getElementById('kTipoCalculo').value = vendedor.comissaoTipo;
+    if (vendedor.comissaoTipo === 'percentual') document.getElementById('kPercentual').value = vendedor.comissaoValor;
+    else document.getElementById('kValorFixo').value = HM.formatPrice(vendedor.comissaoValor);
+    atualizarPreviaComissao();
+  }
+
+  async function carregarVeiculosParaComissao(selecionadoId) {
+    const sel = document.getElementById('kVeiculo');
+    try {
+      const { rows } = await HM.getVehicles({ page: 0, pageSize: 100, orderBy: 'recentes' });
+      sel.innerHTML = '<option value="">Nenhum</option>' + rows.map(v =>
+        `<option value="${v.id}" ${v.id === selecionadoId ? 'selected' : ''}>${escapeHtml(`${v.make} ${v.model} ${v.year}`)}</option>`).join('');
+    } catch (err) {
+      console.error('[admin] Falha ao carregar veículos para a comissão.', err);
+      sel.innerHTML = '<option value="">Nenhum</option>';
+    }
+  }
+
+  async function openComissaoModal(id, triggerEl) {
+    if (!vendedoresCache.length) await carregarVendedores();
+    lastFocusedEl = triggerEl || document.activeElement;
+    document.getElementById('comissaoFormError').textContent = '';
+    document.getElementById('kPagaHint').hidden = true;
+    document.getElementById('comissaoSaveBtn').disabled = false;
+
+    ['kId', 'kUpdatedAt', 'kDescricao', 'kValorBase', 'kPercentual', 'kValorFixo', 'kObservacoes'].forEach(f => { document.getElementById(f).value = ''; });
+    document.getElementById('kDataReferencia').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('kTipoCalculo').value = 'percentual';
+    document.getElementById('kStatus').value = 'pendente';
+    document.getElementById('comissaoModalTitle').textContent = id ? 'Editar Comissão' : 'Nova Comissão';
+
+    const comissao = id ? comissaoState.rows.find(c => c.id === id) : null;
+    if (id && !comissao) {
+      // Sem a linha em memória não dá pra preencher o formulário — melhor
+      // avisar do que abrir um "editar" que na prática criaria outra comissão.
+      toast('Não foi possível abrir esta comissão. Recarregue a lista.', 'error');
+      return;
+    }
+    await carregarVeiculosParaComissao(comissao?.veiculoId);
+
+    if (comissao) {
+      document.getElementById('kId').value = comissao.id;
+      document.getElementById('kUpdatedAt').value = comissao.updatedAt || '';
+      document.getElementById('kVendedor').value = comissao.vendedorId;
+      document.getElementById('kDescricao').value = comissao.descricao;
+      document.getElementById('kDataReferencia').value = comissao.dataReferencia || '';
+      document.getElementById('kTipoCalculo').value = comissao.tipoCalculo;
+      document.getElementById('kValorBase').value = HM.formatPrice(comissao.valorBase);
+      document.getElementById('kPercentual').value = comissao.percentual ?? '';
+      if (comissao.tipoCalculo === 'fixo') document.getElementById('kValorFixo').value = HM.formatPrice(comissao.valor);
+      document.getElementById('kObservacoes').value = comissao.observacoes || '';
+      document.getElementById('kStatus').value = comissao.status === 'paga' ? 'pendente' : comissao.status;
+      if (comissao.status === 'paga') {
+        // Alterar uma comissão paga desencontraria o valor dela do lançamento
+        // já gerado no fluxo de caixa — o caminho certo é excluir e refazer.
+        const hint = document.getElementById('kPagaHint');
+        hint.hidden = false;
+        hint.textContent = 'Esta comissão já foi paga e gerou uma despesa no fluxo de caixa, por isso não pode mais ser editada.';
+        document.getElementById('comissaoSaveBtn').disabled = true;
+      }
+    } else {
+      aplicarPadraoDoVendedor();
+    }
+    atualizarPreviaComissao();
+    openModal(comissaoOverlay, document.getElementById('kDescricao'));
+  }
+  function closeComissaoModal() { closeModalEl(comissaoOverlay); }
+
+  async function saveComissao() {
+    const errEl = document.getElementById('comissaoFormError');
+    const vendedorId = document.getElementById('kVendedor').value;
+    const descricao = document.getElementById('kDescricao').value.trim();
+    if (!vendedorId || !descricao) { errEl.textContent = 'Escolha o vendedor e informe a descrição.'; return; }
+
+    const dados = valoresComissaoDoFormulario();
+    const valor = HM.calcularComissao(dados);
+    if (valor <= 0) { errEl.textContent = 'A comissão calculada precisa ser maior que zero.'; return; }
+    errEl.textContent = '';
+
+    const editId = document.getElementById('kId').value;
+    const payload = {
+      vendedorId,
+      descricao,
+      valorBase: dados.tipoCalculo === 'percentual' ? dados.valorBase : 0,
+      tipoCalculo: dados.tipoCalculo,
+      percentual: dados.percentual,
+      valor,
+      status: document.getElementById('kStatus').value,
+      dataReferencia: document.getElementById('kDataReferencia').value || null,
+      veiculoId: document.getElementById('kVeiculo').value || null,
+      observacoes: document.getElementById('kObservacoes').value.trim(),
+    };
+
+    const saveBtn = document.getElementById('comissaoSaveBtn');
+    saveBtn.disabled = true;
+    try {
+      if (editId) {
+        payload.expectedUpdatedAt = document.getElementById('kUpdatedAt').value || null;
+        await HM.updateComissao(editId, payload);
+        toast('Comissão atualizada!', 'success');
+      } else {
+        await HM.createComissao(payload);
+        toast('Comissão registrada!', 'success');
+      }
+      await loadComissoesPage(true);
+      closeComissaoModal();
+    } catch (err) {
+      console.error('[admin] Falha ao salvar comissão.', err);
+      errEl.textContent = (err instanceof HM.ConcurrencyError) ? err.message : 'Não foi possível salvar a comissão. Tente novamente.';
+    } finally {
+      saveBtn.disabled = false;
+    }
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
+   * RELATÓRIOS
+   * ------------------------------------------------------------------------
+   * Todos os relatórios chegam do banco no mesmo formato
+   * {titulo, colunas, linhas, resumo}, então a tela e os três exportadores
+   * são genéricos — nada aqui sabe qual relatório está sendo mostrado.
+   * ════════════════════════════════════════════════════════════════════ */
+
+  let relatorioAtual = null;
+
+  /** Colunas cujo conteúdo numérico representa dinheiro. Sem isso, uma
+   * contagem ("3 lançamentos") sairia formatada como "R$ 3,00". */
+  const REL_COLUNA_MOEDA = /^(valor|pago|em aberto|base|receitas|despesas|lucro|total.*|preço)$/i;
+  /** Números que não levam separador de milhar — "Ano" viraria "2.023". */
+  const REL_COLUNA_CRUA = /^(ano)$/i;
+
+  function relFormatarCelula(valor, coluna) {
+    if (valor === null || valor === undefined) return '—';
+    if (typeof valor === 'number') {
+      if (REL_COLUNA_CRUA.test(coluna)) return String(valor);
+      return REL_COLUNA_MOEDA.test(coluna)
+        ? valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+        : valor.toLocaleString('pt-BR');
+    }
+    return String(valor);
+  }
+
+  document.getElementById('relGerarBtn').addEventListener('click', gerarRelatorio);
+
+  async function gerarRelatorio() {
+    const btn = document.getElementById('relGerarBtn');
+    const tipo = document.getElementById('relTipo').value;
+    const inicio = document.getElementById('relInicio').value || null;
+    const fim = document.getElementById('relFim').value || null;
+    if (inicio && fim && inicio > fim) {
+      toast('A data inicial não pode ser depois da data final.', 'error');
+      return;
+    }
+    btn.disabled = true;
+    try {
+      relatorioAtual = await HM.getRelatorio(tipo, inicio, fim);
+      renderRelatorio();
+    } catch (err) {
+      console.error('[admin] Falha ao gerar relatório.', err);
+      toast('Não foi possível gerar o relatório.', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function renderRelatorio() {
+    const { colunas, linhas, resumo } = relatorioAtual;
+    document.getElementById('relThead').innerHTML = colunas.map(c => `<th scope="col">${escapeHtml(c)}</th>`).join('');
+    document.getElementById('relTbody').innerHTML = linhas.length
+      ? linhas.map(linha => `<tr>${linha.map((celula, i) => `<td>${escapeHtml(relFormatarCelula(celula, colunas[i]))}</td>`).join('')}</tr>`).join('')
+      : `<tr><td colspan="${colunas.length}"><div class="empty-state"><p>Nenhum dado no período selecionado.</p></div></td></tr>`;
+
+    const cards = Object.entries(resumo || {}).filter(([chave]) => chave !== 'Aviso');
+    document.getElementById('relResumo').innerHTML = cards.map(([rotulo, valor]) => `
+      <div class="stat-card blue">
+        <div class="stat-card-label">${escapeHtml(rotulo)}</div>
+        <div class="stat-card-val">${escapeHtml(relFormatarCelula(valor, rotulo))}</div>
+      </div>`).join('');
+
+    document.getElementById('relInfo').textContent = resumo?.Aviso
+      ? resumo.Aviso
+      : `${linhas.length} linha(s) — ${relatorioAtual.titulo}`;
+    document.getElementById('relExport').hidden = !linhas.length;
+  }
+
+  function relNomeArquivo(extensao) {
+    const base = (relatorioAtual?.titulo || 'relatorio').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-');
+    return `holanda-motors-${base}-${new Date().toISOString().slice(0, 10)}.${extensao}`;
+  }
+
+  function baixarArquivo(blob, nome) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nome;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  /** Carrega uma biblioteca de exportação só quando ela é usada de fato —
+   * quem nunca exporta Excel/PDF não paga o download. */
+  function carregarScriptExterno(src) {
+    return new Promise((resolve, reject) => {
+      if (document.querySelector(`script[data-lib="${src}"]`)) return resolve();
+      const tag = document.createElement('script');
+      tag.src = src;
+      tag.dataset.lib = src;
+      tag.onload = () => resolve();
+      tag.onerror = () => reject(new Error(`Não foi possível carregar ${src}`));
+      document.head.appendChild(tag);
+    });
+  }
+
+  document.getElementById('relCsvBtn').addEventListener('click', () => {
+    if (!relatorioAtual) return;
+    // Ponto e vírgula e vírgula decimal: é o que o Excel em português abre
+    // direto, sem passar pelo assistente de importação. O BOM no início
+    // preserva os acentos.
+    const escapar = (valor) => {
+      const texto = valor === null || valor === undefined ? ''
+        : typeof valor === 'number' ? String(valor).replace('.', ',')
+        : String(valor);
+      return /[";\n]/.test(texto) ? `"${texto.replace(/"/g, '""')}"` : texto;
+    };
+    const linhas = [relatorioAtual.colunas, ...relatorioAtual.linhas];
+    const csv = '﻿' + linhas.map(l => l.map(escapar).join(';')).join('\r\n');
+    baixarArquivo(new Blob([csv], { type: 'text/csv;charset=utf-8' }), relNomeArquivo('csv'));
+    toast('CSV gerado — confira sua pasta de downloads.', 'success');
+  });
+
+  document.getElementById('relXlsxBtn').addEventListener('click', async () => {
+    if (!relatorioAtual) return;
+    const btn = document.getElementById('relXlsxBtn');
+    btn.disabled = true;
+    try {
+      await carregarScriptExterno('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+      const planilha = XLSX.utils.aoa_to_sheet([relatorioAtual.colunas, ...relatorioAtual.linhas]);
+      const pasta = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(pasta, planilha, 'Relatório');
+      XLSX.writeFile(pasta, relNomeArquivo('xlsx'));
+      toast('Excel gerado — confira sua pasta de downloads.', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao gerar Excel.', err);
+      toast('Não foi possível gerar o Excel. Verifique sua conexão.', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('relPdfBtn').addEventListener('click', async () => {
+    if (!relatorioAtual) return;
+    const btn = document.getElementById('relPdfBtn');
+    btn.disabled = true;
+    try {
+      await carregarScriptExterno('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js');
+      await carregarScriptExterno('https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js');
+      const doc = new window.jspdf.jsPDF({ orientation: relatorioAtual.colunas.length > 5 ? 'landscape' : 'portrait' });
+      const periodo = [document.getElementById('relInicio').value, document.getElementById('relFim').value]
+        .filter(Boolean).map(HM.formatDateBR).join(' a ');
+
+      doc.setFontSize(14);
+      doc.text(`Holanda Motors — ${relatorioAtual.titulo}`, 14, 16);
+      doc.setFontSize(9);
+      doc.text(periodo ? `Período: ${periodo}` : 'Período: todos os registros', 14, 22);
+
+      doc.autoTable({
+        startY: 27,
+        head: [relatorioAtual.colunas],
+        body: relatorioAtual.linhas.map(l => l.map((celula, i) => relFormatarCelula(celula, relatorioAtual.colunas[i]))),
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [200, 16, 46] },
+      });
+      doc.save(relNomeArquivo('pdf'));
+      toast('PDF gerado — confira sua pasta de downloads.', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao gerar PDF.', err);
+      toast('Não foi possível gerar o PDF. Verifique sua conexão.', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   /* ── EXCLUSÃO (modal de confirmação compartilhado) ── */
   const confirmOverlay = document.getElementById('confirmOverlay');
   document.getElementById('confirmCancelBtn').addEventListener('click', closeConfirm);
@@ -1372,6 +1874,10 @@
         await HM.deleteLancamento(id);
         await recarregarFinViewAtiva();
         toast('Lançamento excluído.', 'success');
+      } else if (type === 'comissao') {
+        await HM.deleteComissao(id);
+        await loadComissoesPage(true);
+        toast('Comissão excluída.', 'success');
       }
       if (type === 'vehicle' || type === 'consig') await renderDashboard();
       closeConfirm();
@@ -1499,6 +2005,51 @@
     } catch (err) {
       console.error('[admin] Falha ao restaurar backup.', err);
       toast('Arquivo de backup inválido ou corrompido.', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  /* ── BACKUP FINANCEIRO (arquivo separado do backup do estoque) ── */
+  document.getElementById('backupFinExportBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('backupFinExportBtn');
+    btn.disabled = true;
+    try {
+      const backup = await HM.exportBackupFinanceiro();
+      baixarArquivo(
+        new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }),
+        `holanda-motors-financeiro-${new Date().toISOString().slice(0, 10)}.json`
+      );
+      toast('Backup financeiro gerado — confira sua pasta de downloads.', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao gerar backup financeiro.', err);
+      toast('Não foi possível gerar o backup financeiro.', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('backupFinRestoreBtn').addEventListener('click', async () => {
+    const fileInput = document.getElementById('backupFinFileInput');
+    const logEl = document.getElementById('backupFinLog');
+    const file = fileInput.files[0];
+    if (!file) { toast('Selecione um arquivo de backup financeiro primeiro.', 'error'); return; }
+    const btn = document.getElementById('backupFinRestoreBtn');
+    btn.disabled = true;
+    logEl.innerHTML = '';
+    try {
+      const backup = JSON.parse(await file.text());
+      await HM.restoreBackupFinanceiro(backup, (msg) => {
+        const li = document.createElement('li');
+        li.textContent = msg;
+        li.className = msg.startsWith('✓') ? 'log-ok' : msg.startsWith('✗') ? 'log-err' : '';
+        logEl.appendChild(li);
+      });
+      toast('Restauração financeira concluída — confira o resultado de cada etapa abaixo.', 'success');
+      await recarregarFinViewAtiva();
+    } catch (err) {
+      console.error('[admin] Falha ao restaurar backup financeiro.', err);
+      toast(err.message || 'Arquivo de backup financeiro inválido ou corrompido.', 'error');
     } finally {
       btn.disabled = false;
     }
@@ -1635,7 +2186,7 @@
   }
 
   /* ── FORMATAÇÃO DE PREÇO (aplica em qualquer campo de preço do painel) ── */
-  ['vPrice', 'cValue', 'lValor', 'baixaValor'].forEach(id => {
+  ['vPrice', 'cValue', 'lValor', 'baixaValor', 'kValorBase', 'kValorFixo'].forEach(id => {
     document.getElementById(id).addEventListener('input', function () {
       const v = this.value.replace(/[^\d]/g, '');
       this.value = v ? HM.formatPrice(Number(v)) : '';
@@ -1676,6 +2227,7 @@
       else if (overlay === confirmOverlay) closeConfirm();
       else if (overlay === lancamentoOverlay) closeLancamentoModal();
       else if (overlay === baixaOverlay) closeBaixaModal();
+      else if (overlay === comissaoOverlay) closeComissaoModal();
       return;
     }
     if (e.key !== 'Tab') return;

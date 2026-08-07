@@ -44,6 +44,7 @@ O painel também traz: upload de várias fotos por veículo (com compactação a
 - **JavaScript** vanilla (ES6+, assíncrono), sem bundler — o SDK do Supabase é carregado via CDN
 - **[Supabase](https://supabase.com)**: Postgres (banco), Auth (login do painel) e Storage (fotos dos veículos)
 - **[Chart.js](https://www.chartjs.org)** via CDN — só carregado em `/admin/`, usado nos gráficos do Dashboard Financeiro
+- **[SheetJS](https://sheetjs.com)** e **[jsPDF](https://github.com/parallax/jsPDF)** via CDN — baixados sob demanda, só quando o gestor exporta um relatório em Excel ou PDF
 - **Google Fonts** (Barlow / Barlow Condensed)
 
 Não há etapa de build, bundler ou transpilação — os arquivos rodam exatamente como estão, direto no navegador. Isso é intencional para manter a compatibilidade com o GitHub Pages.
@@ -94,6 +95,7 @@ Tabelas criadas por `supabase/schema.sql`:
 | `emails_permitidos` | E-mails autorizados a concluir login social (Google) — ver [Como adicionar novos administradores](#como-adicionar-novos-administradores). Só administrador lê/escreve. |
 | `lancamentos_financeiros` | Ledger único do Financeiro (entradas e saídas) — ver [Módulo Financeiro](#módulo-financeiro). Restrito a gerente/administrador. |
 | `pagamentos_financeiros` | Um evento por baixa (recebimento/pagamento) de um lançamento — valor, data, forma e quem registrou. Só é gravada por `registrar_pagamento`; imutável depois de criada. |
+| `comissoes` | Comissões dos vendedores (percentual ou valor fixo), ligadas ao usuário do painel e, opcionalmente, ao veículo vendido e à despesa gerada no pagamento. Vendedor lê só as próprias; escrita restrita a gerente/administrador. |
 | `categorias_financeiras` | Categorias e subcategorias (entrada/saída) usadas pelos lançamentos financeiros. |
 | `clientes` / `fornecedores` | Cadastro leve (nome, CPF/CNPJ, telefone) referenciado opcionalmente pelos lançamentos — preparado para Contas a Receber/Pagar (fase futura). |
 
@@ -188,10 +190,9 @@ Cada card e o modal também mostram uma simulação de parcelamento ("a partir d
 
 ## Módulo Financeiro
 
-Seis telas prontas: Dashboard Financeiro, Fluxo de Caixa, Contas a Receber,
-Contas a Pagar, Despesas e Receitas. **Comissão de vendedores, Relatórios
-(com exportação PDF/Excel/CSV) e Backup Financeiro dedicado ainda não
-existem** — ficam para a próxima fase.
+Oito telas: Dashboard Financeiro, Fluxo de Caixa, Contas a Receber, Contas a
+Pagar, Despesas, Receitas, Comissões e Relatórios — mais o Backup Financeiro
+em Configurações.
 
 As cinco telas de lista são a mesma tabela sob recortes diferentes, então
 existe **uma implementação só** no código: cada visão declara apenas o que a
@@ -241,6 +242,29 @@ nova é acrescentar um item nesse objeto, não copiar uma página.
   marca de um veículo), sem cadastro prévio obrigatório.
 - **Despesas / Receitas** — recorte por tipo (saída/entrada) com filtro
   por categoria, forma de pagamento e período.
+- **Comissões** — a única tela do Financeiro que o vendedor enxerga, e só
+  com as comissões dele (garantido por RLS, não por esconder botão). A
+  comissão pode ser um percentual sobre o valor da venda ou um valor fixo,
+  com configuração padrão e meta mensal por vendedor. Marcar como paga gera
+  automaticamente a despesa correspondente no fluxo de caixa (categoria
+  "Funcionários"), já quitada — o dinheiro que sai não fica só num módulo à
+  parte. Criar, editar, pagar e configurar são restritos a
+  gerente/administrador, inclusive no banco.
+- **Relatórios** — nove relatórios (fluxo de caixa, receitas, despesas,
+  lucro por mês, clientes inadimplentes, receitas e despesas por categoria,
+  vendas por período e comissões), todos exportáveis em **CSV, Excel e
+  PDF**. O banco devolve qualquer relatório no mesmo formato
+  `{titulo, colunas, linhas, resumo}`, então a tela e os três exportadores
+  são genéricos — acrescentar um relatório é acrescentar um ramo na função
+  SQL, sem tocar no front. As bibliotecas de Excel e PDF são baixadas só
+  quando esses botões são usados de fato. Relatórios detalhados são
+  limitados a 5.000 linhas e avisam quando houve corte, em vez de entregar
+  um arquivo incompleto em silêncio.
+- **Backup financeiro** (em Configurações) — arquivo JSON separado do backup
+  do estoque, com lançamentos, pagamentos, categorias, clientes,
+  fornecedores e comissões. A restauração preserva os identificadores
+  originais para os vínculos continuarem válidos: registros existentes são
+  atualizados, novos são criados e nada é apagado.
 
 ## Preview ao compartilhar (Edge Function)
 
