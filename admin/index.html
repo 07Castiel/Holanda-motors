@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../assets/css/base.css?v=4">
-<link rel="stylesheet" href="../assets/css/admin.css?v=4">
+<link rel="stylesheet" href="../assets/css/base.css?v=5">
+<link rel="stylesheet" href="../assets/css/admin.css?v=5">
 </head>
 <body>
 
@@ -78,6 +78,22 @@
       <li><button class="nav-item" data-page="fin-fluxo" data-min-role="gerente" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
         Fluxo de Caixa
+      </button></li>
+      <li><button class="nav-item" data-page="fin-receber" data-min-role="gerente" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 19V5"/><polyline points="5 12 12 5 19 12"/></svg>
+        Contas a Receber
+      </button></li>
+      <li><button class="nav-item" data-page="fin-pagar" data-min-role="gerente" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14"/><polyline points="19 12 12 19 5 12"/></svg>
+        Contas a Pagar
+      </button></li>
+      <li><button class="nav-item" data-page="fin-despesas" data-min-role="gerente" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+        Despesas
+      </button></li>
+      <li><button class="nav-item" data-page="fin-receitas" data-min-role="gerente" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 12V8H6a2 2 0 010-4h12v4"/><path d="M4 6v12a2 2 0 002 2h14v-4"/><path d="M18 12a2 2 0 000 4h4v-4z"/></svg>
+        Receitas
       </button></li>
       <li class="nav-section">Sistema</li>
       <li><button class="nav-item" data-page="usuarios" data-min-role="administrador" hidden>
@@ -244,73 +260,17 @@
         </div>
       </section>
 
-      <!-- FLUXO DE CAIXA -->
-      <section class="page" id="page-fin-fluxo">
-        <div class="section-header">
-          <h1 class="section-title">Fluxo de Caixa</h1>
-          <button class="btn-primary" id="newLancamentoBtn">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Novo lançamento
-          </button>
-        </div>
-        <div class="search-bar">
-          <label class="sr-only" for="finSearch">Buscar lançamento</label>
-          <input class="search-input" id="finSearch" placeholder="Buscar por descrição...">
-          <label class="sr-only" for="finFilterTipo">Filtrar por tipo</label>
-          <select class="filter-select" id="finFilterTipo">
-            <option value="">Entradas e saídas</option>
-            <option value="entrada">Entradas</option>
-            <option value="saida">Saídas</option>
-          </select>
-          <label class="sr-only" for="finFilterStatus">Filtrar por status</label>
-          <select class="filter-select" id="finFilterStatus">
-            <option value="">Todos os status</option>
-            <option value="pago">Pago</option>
-            <option value="pendente">Pendente</option>
-            <option value="cancelado">Cancelado</option>
-          </select>
-          <label class="sr-only" for="finFilterCategoria">Filtrar por categoria</label>
-          <select class="filter-select" id="finFilterCategoria">
-            <option value="">Todas as categorias</option>
-          </select>
-          <label class="sr-only" for="finFilterForma">Filtrar por forma de pagamento</label>
-          <select class="filter-select" id="finFilterForma">
-            <option value="">Todas as formas</option>
-            <option value="pix">PIX</option>
-            <option value="dinheiro">Dinheiro</option>
-            <option value="cartao_debito">Cartão débito</option>
-            <option value="cartao_credito">Cartão crédito</option>
-            <option value="transferencia">Transferência</option>
-            <option value="financiamento">Financiamento</option>
-            <option value="cheque">Cheque</option>
-          </select>
-          <label class="sr-only" for="finFilterInicio">De</label>
-          <input class="search-input fin-date-input" id="finFilterInicio" type="date" title="Data inicial">
-          <label class="sr-only" for="finFilterFim">Até</label>
-          <input class="search-input fin-date-input" id="finFilterFim" type="date" title="Data final">
-        </div>
-        <div class="table-wrap">
-          <table>
-            <caption class="sr-only">Lançamentos do fluxo de caixa</caption>
-            <thead>
-              <tr>
-                <th scope="col">Data</th>
-                <th scope="col">Descrição</th>
-                <th scope="col">Categoria</th>
-                <th scope="col">Tipo</th>
-                <th scope="col">Valor</th>
-                <th scope="col">Status</th>
-                <th scope="col">Ações</th>
-              </tr>
-            </thead>
-            <tbody id="lancamentoTableBody" aria-live="polite"></tbody>
-          </table>
-        </div>
-        <div class="list-footer">
-          <span class="list-count" id="lancamentoListCount"></span>
-          <button class="btn-secondary" id="lancamentoLoadMoreBtn" type="button" hidden>Carregar mais</button>
-        </div>
-      </section>
+      <!-- VISÕES DO LEDGER FINANCEIRO
+           As cinco páginas abaixo são a mesma tabela sob recortes diferentes
+           (Fluxo de Caixa mostra tudo; as outras filtram por tipo/status), então
+           o conteúdo — filtros, tabela e paginação — é montado por admin.js a
+           partir do descritor FIN_VIEWS, em vez de repetir a mesma marcação
+           cinco vezes aqui. -->
+      <section class="page" id="page-fin-fluxo"></section>
+      <section class="page" id="page-fin-receber"></section>
+      <section class="page" id="page-fin-pagar"></section>
+      <section class="page" id="page-fin-despesas"></section>
+      <section class="page" id="page-fin-receitas"></section>
 
       <!-- USUÁRIOS -->
       <section class="page" id="page-usuarios">
@@ -644,11 +604,24 @@
         </div>
         <div class="field"><label for="lNumeroDocumento">Número do documento</label><input id="lNumeroDocumento" placeholder="NF, recibo, contrato..."></div>
       </div>
+      <div class="form-row">
+        <div class="field">
+          <label for="lPessoa" id="lPessoaLabel">Cliente</label>
+          <input id="lPessoa" list="lPessoaLista" placeholder="Nome do cliente (opcional)" autocomplete="off">
+          <datalist id="lPessoaLista"></datalist>
+        </div>
+        <div class="field"><label for="lCentroCusto">Centro de custo</label><input id="lCentroCusto" placeholder="Ex: Oficina, Showroom, Administrativo"></div>
+      </div>
       <div class="form-row full">
         <div class="field"><label for="lObservacoes">Observações</label><textarea id="lObservacoes" placeholder="Detalhes adicionais..."></textarea></div>
       </div>
       <p class="page-hint" id="lValorPagoHint" hidden></p>
       <p class="field-error" id="lancamentoFormError" role="alert"></p>
+
+      <div id="lHistoricoWrap" hidden>
+        <h3 class="history-title">Histórico de baixas</h3>
+        <ul class="log-list" id="lHistoricoList"></ul>
+      </div>
     </form>
     <div class="modal-footer">
       <button class="btn-secondary" id="lancamentoCancelBtn">Cancelar</button>
@@ -666,9 +639,26 @@
       <label for="baixaValor">Valor recebido/pago agora</label>
       <input id="baixaValor" placeholder="R$ 0">
     </div>
-    <div class="field" style="text-align:left;margin-bottom:16px">
+    <div class="field" style="text-align:left;margin-bottom:8px">
       <label for="baixaData">Data</label>
       <input id="baixaData" type="date">
+    </div>
+    <div class="field" style="text-align:left;margin-bottom:8px">
+      <label for="baixaForma">Forma de pagamento</label>
+      <select id="baixaForma">
+        <option value="">Não informado</option>
+        <option value="pix">PIX</option>
+        <option value="dinheiro">Dinheiro</option>
+        <option value="cartao_debito">Cartão débito</option>
+        <option value="cartao_credito">Cartão crédito</option>
+        <option value="transferencia">Transferência</option>
+        <option value="financiamento">Financiamento</option>
+        <option value="cheque">Cheque</option>
+      </select>
+    </div>
+    <div class="field" style="text-align:left;margin-bottom:16px">
+      <label for="baixaObs">Observação (opcional)</label>
+      <input id="baixaObs" placeholder="Ex: 2ª parcela, pago em dinheiro">
     </div>
     <p class="field-error" id="baixaFormError" role="alert"></p>
     <div class="confirm-actions">
@@ -695,8 +685,8 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.2"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-<script src="../assets/js/supabase-client.js?v=4"></script>
-<script src="../assets/js/data.js?v=4"></script>
-<script src="../assets/js/admin.js?v=4"></script>
+<script src="../assets/js/supabase-client.js?v=5"></script>
+<script src="../assets/js/data.js?v=5"></script>
+<script src="../assets/js/admin.js?v=5"></script>
 </body>
 </html>

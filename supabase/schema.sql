@@ -1061,3 +1061,218 @@ on conflict do nothing;
 
 -- Índice de FK que ficou faltando na Parte 7 (achado do Advisor).
 create index if not exists idx_emails_permitidos_criado_por on emails_permitidos (criado_por);
+
+-- ============================================================================
+-- PARTE 9 — Histórico de pagamentos (Fase 2 do módulo financeiro)
+-- ----------------------------------------------------------------------------
+-- Um evento por baixa, em vez de só o acumulado em lancamentos.valor_pago.
+-- Resolve a limitação da Fase 1: duas baixas parciais no mesmo lançamento
+-- agora aparecem separadas (data, valor, forma, quem registrou) e os números
+-- "de hoje"/"do mês" do dashboard passam a ser exatos mesmo quando um
+-- lançamento é pago em parcelas ao longo de meses diferentes.
+-- Imutável depois de gravado (sem política de update), igual a logs_acoes.
+-- ============================================================================
+
+create table if not exists pagamentos_financeiros (
+  id uuid primary key default gen_random_uuid(),
+  lancamento_id uuid not null references lancamentos_financeiros (id) on delete cascade,
+  valor numeric(12, 2) not null check (valor > 0),
+  data_pagamento date not null default current_date,
+  forma_pagamento text check (forma_pagamento in ('pix', 'dinheiro', 'cartao_debito', 'cartao_credito', 'transferencia', 'financiamento', 'cheque')),
+  observacoes text,
+  registrado_por uuid references auth.users (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_pagamentos_lancamento on pagamentos_financeiros (lancamento_id);
+create index if not exists idx_pagamentos_data on pagamentos_financeiros (data_pagamento desc);
+create index if not exists idx_pagamentos_registrado_por on pagamentos_financeiros (registrado_por);
+
+alter table pagamentos_financeiros enable row level security;
+
+drop policy if exists "pagamentos_select" on pagamentos_financeiros;
+create policy "pagamentos_select" on pagamentos_financeiros for select
+  using ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "pagamentos_insert" on pagamentos_financeiros;
+create policy "pagamentos_insert" on pagamentos_financeiros for insert
+  with check ((select public.current_user_role()) in ('gerente', 'administrador'));
+drop policy if exists "pagamentos_delete" on pagamentos_financeiros;
+create policy "pagamentos_delete" on pagamentos_financeiros for delete
+  using ((select public.current_user_role()) = 'administrador');
+
+-- Backfill: lançamentos que já tinham valor_pago antes desta tabela existir
+-- ganham um evento equivalente, pra nenhum histórico nascer vazio.
+insert into pagamentos_financeiros (lancamento_id, valor, data_pagamento, forma_pagamento, observacoes)
+select l.id, l.valor_pago, coalesce(l.data_pagamento, l.data_lancamento), l.forma_pagamento,
+       'Baixa registrada antes do histórico de pagamentos existir.'
+from lancamentos_financeiros l
+where l.valor_pago > 0
+  and not exists (select 1 from pagamentos_financeiros p where p.lancamento_id = l.id);
+
+-- ----------------------------------------------------------------------------
+-- registrar_pagamento — agora grava o evento no histórico além de atualizar o
+-- acumulado. O DROP é necessário: acrescentar parâmetros cria uma sobrecarga
+-- nova em vez de substituir, o que deixaria a chamada ambígua.
+-- ----------------------------------------------------------------------------
+drop function if exists public.registrar_pagamento(uuid, numeric, date);
+drop function if exists public.registrar_pagamento(uuid, numeric, date, text, text);
+
+create function public.registrar_pagamento(
+  p_id uuid,
+  p_valor numeric,
+  p_data_pagamento date default current_date,
+  p_forma_pagamento text default null,
+  p_observacoes text default null
+)
+returns lancamentos_financeiros
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_row lancamentos_financeiros;
+  v_saldo numeric;
+begin
+  if p_valor <= 0 then
+    raise exception 'O valor do pagamento deve ser maior que zero.';
+  end if;
+
+  select saldo into v_saldo from lancamentos_financeiros where id = p_id for update;
+  if v_saldo is null then
+    raise exception 'Lançamento não encontrado.';
+  end if;
+  if v_saldo <= 0 then
+    raise exception 'Este lançamento já está totalmente quitado.';
+  end if;
+
+  -- Nunca aceita baixa maior que o saldo em aberto: o excedente é ignorado
+  -- em vez de estourar a constraint valor_pago <= valor.
+  if p_valor > v_saldo then
+    p_valor := v_saldo;
+  end if;
+
+  insert into pagamentos_financeiros (lancamento_id, valor, data_pagamento, forma_pagamento, observacoes, registrado_por)
+  values (p_id, p_valor, coalesce(p_data_pagamento, current_date), p_forma_pagamento, p_observacoes, auth.uid());
+
+  update lancamentos_financeiros
+  set valor_pago = valor_pago + p_valor,
+      status = case when valor_pago + p_valor >= valor then 'pago' else 'pendente' end,
+      data_pagamento = coalesce(p_data_pagamento, current_date),
+      forma_pagamento = coalesce(p_forma_pagamento, forma_pagamento),
+      updated_at = now()
+  where id = p_id
+  returning * into v_row;
+
+  return v_row;
+end;
+$$;
+grant execute on function public.registrar_pagamento(uuid, numeric, date, text, text) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- reabrir_lancamento — desfaz as baixas de um lançamento (apaga o histórico
+-- dele e zera o acumulado) numa única transação, em vez de dois UPDATEs
+-- soltos vindos do navegador.
+-- ----------------------------------------------------------------------------
+create or replace function public.reabrir_lancamento(p_id uuid)
+returns lancamentos_financeiros
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_row lancamentos_financeiros;
+begin
+  delete from pagamentos_financeiros where lancamento_id = p_id;
+
+  update lancamentos_financeiros
+  set valor_pago = 0, status = 'pendente', data_pagamento = null, updated_at = now()
+  where id = p_id
+  returning * into v_row;
+
+  if v_row.id is null then
+    raise exception 'Lançamento não encontrado.';
+  end if;
+  return v_row;
+end;
+$$;
+grant execute on function public.reabrir_lancamento(uuid) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- dashboard_financeiro reescrita sobre pagamentos_financeiros: antes somava
+-- lancamentos.valor_pago pela data da ÚLTIMA baixa, o que jogava o valor
+-- inteiro pro mês/dia errado quando um lançamento era pago em parcelas.
+-- Agora cada baixa conta no dia em que realmente aconteceu.
+-- ----------------------------------------------------------------------------
+create or replace function public.dashboard_financeiro()
+returns jsonb
+language sql
+security invoker
+stable
+set search_path = public
+as $$
+  with pag as (
+    select p.valor, p.data_pagamento, l.tipo, l.categoria_id
+    from pagamentos_financeiros p
+    join lancamentos_financeiros l on l.id = p.lancamento_id
+    where l.status <> 'cancelado'
+  )
+  select jsonb_build_object(
+    'saldoAtual',
+      coalesce((select sum(valor) from pag where tipo = 'entrada'), 0)
+      - coalesce((select sum(valor) from pag where tipo = 'saida'), 0),
+    'entradasMes',
+      coalesce((select sum(valor) from pag where tipo = 'entrada'
+        and date_trunc('month', data_pagamento) = date_trunc('month', current_date)), 0),
+    'saidasMes',
+      coalesce((select sum(valor) from pag where tipo = 'saida'
+        and date_trunc('month', data_pagamento) = date_trunc('month', current_date)), 0),
+    'contasVencidas',
+      (select count(*) from lancamentos_financeiros
+        where status = 'pendente' and data_vencimento < current_date),
+    'contasVencidasValor',
+      coalesce((select sum(saldo) from lancamentos_financeiros
+        where status = 'pendente' and data_vencimento < current_date), 0),
+    'contasAVencer',
+      (select count(*) from lancamentos_financeiros
+        where status = 'pendente' and data_vencimento >= current_date and data_vencimento <= current_date + 7),
+    'contasAVencerValor',
+      coalesce((select sum(saldo) from lancamentos_financeiros
+        where status = 'pendente' and data_vencimento >= current_date and data_vencimento <= current_date + 7), 0),
+    'recebimentosHoje',
+      coalesce((select sum(valor) from pag where tipo = 'entrada' and data_pagamento = current_date), 0),
+    'pagamentosHoje',
+      coalesce((select sum(valor) from pag where tipo = 'saida' and data_pagamento = current_date), 0),
+    'fluxoPorMes', coalesce((
+      select jsonb_agg(m order by m.mes) from (
+        select
+          to_char(meses.mes, 'YYYY-MM') as mes,
+          coalesce((select sum(valor) from pag where tipo = 'entrada'
+            and date_trunc('month', data_pagamento) = meses.mes), 0) as entradas,
+          coalesce((select sum(valor) from pag where tipo = 'saida'
+            and date_trunc('month', data_pagamento) = meses.mes), 0) as saidas
+        from generate_series(
+          date_trunc('month', current_date) - interval '5 months',
+          date_trunc('month', current_date),
+          interval '1 month'
+        ) as meses(mes)
+      ) m
+    ), '[]'::jsonb),
+    'receitasPorCategoria', coalesce((
+      select jsonb_agg(c) from (
+        select coalesce(cf.nome, 'Sem categoria') as categoria, sum(p.valor) as total
+        from pag p left join categorias_financeiras cf on cf.id = p.categoria_id
+        where p.tipo = 'entrada'
+        group by cf.nome order by total desc limit 8
+      ) c
+    ), '[]'::jsonb),
+    'despesasPorCategoria', coalesce((
+      select jsonb_agg(c) from (
+        select coalesce(cf.nome, 'Sem categoria') as categoria, sum(p.valor) as total
+        from pag p left join categorias_financeiras cf on cf.id = p.categoria_id
+        where p.tipo = 'saida'
+        group by cf.nome order by total desc limit 8
+      ) c
+    ), '[]'::jsonb)
+  );
+$$;
+grant execute on function public.dashboard_financeiro() to authenticated;

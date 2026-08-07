@@ -694,10 +694,8 @@ const HM = (function () {
       categoria_id: input.categoriaId || null,
       subcategoria_id: input.subcategoriaId || null,
       valor: typeof input.valor === 'number' ? input.valor : parsePrice(input.valor),
-      valor_pago: typeof input.valorPago === 'number' ? input.valorPago : parsePrice(input.valorPago || 0),
       data_lancamento: input.dataLancamento || new Date().toISOString().slice(0, 10),
       data_vencimento: input.dataVencimento || null,
-      data_pagamento: input.dataPagamento || null,
       forma_pagamento: input.formaPagamento || null,
       status: input.status || 'pendente',
       origem: input.origem || 'manual',
@@ -761,21 +759,64 @@ const HM = (function () {
     return row ? mapLancamentoRow(row) : null;
   }
 
+  /**
+   * `valor_pago` nunca é escrito direto: quem manda no quanto foi pago é a
+   * tabela pagamentos_financeiros, sempre via registrar_pagamento(). Por
+   * isso um lançamento marcado como "pago" no formulário nasce pendente e
+   * recebe a baixa logo em seguida — assim ele aparece no histórico e nos
+   * totais do dashboard como qualquer outra baixa, em vez de virar um valor
+   * pago que ninguém sabe quando entrou.
+   */
   async function createLancamento(input) {
-    const row = unwrap(await supabaseClient.from('lancamentos_financeiros').insert(lancamentoPayload(input)).select('id').single());
+    const quitarNaCriacao = input.status === 'pago';
+    const payload = { ...lancamentoPayload(input), status: quitarNaCriacao ? 'pendente' : (input.status || 'pendente') };
+    const row = unwrap(await supabaseClient.from('lancamentos_financeiros').insert(payload).select('id').single());
+    if (quitarNaCriacao) {
+      await registrarPagamento(row.id, payload.valor, {
+        dataPagamento: input.dataPagamento || payload.data_lancamento,
+        formaPagamento: input.formaPagamento,
+      });
+    }
     return row.id;
   }
 
   /** `input.expectedUpdatedAt` ativa a checagem de concorrência otimista —
    * mesmo padrão de updateVehicle/updateConsig: se o lançamento mudou entre
-   * a leitura e a gravação, lança ConcurrencyError em vez de sobrescrever. */
+   * a leitura e a gravação, lança ConcurrencyError em vez de sobrescrever.
+   * Mudar o status no formulário reconcilia o histórico de baixas: marcar
+   * como "pago" quita o saldo em aberto, voltar para "pendente" desfaz as
+   * baixas — nos dois casos passando pelas mesmas RPCs do botão de baixa. */
   async function updateLancamento(id, input) {
-    let query = supabaseClient.from('lancamentos_financeiros').update(lancamentoPayload(input)).eq('id', id);
+    const atual = await getLancamentoById(id);
+    if (!atual) throw new Error('Lançamento não encontrado.');
+
+    const payload = lancamentoPayload(input);
+    const statusPedido = input.status || 'pendente';
+    // Quanto ficaria em aberto com o valor novo, considerando o que já foi
+    // baixado — é isso que decide se ainda falta quitar alguma coisa.
+    const saldoRestante = payload.valor - atual.valorPago;
+    const vaiQuitar = statusPedido === 'pago' && saldoRestante > 0;
+    const vaiReabrir = statusPedido === 'pendente' && atual.valorPago > 0;
+
+    // Quando ainda falta quitar, o UPDATE grava "pendente" e quem fecha para
+    // "pago" é o registrar_pagamento logo abaixo. Se já estava quitado, o
+    // status pedido vale como está — sem isso, editar só a descrição de um
+    // lançamento pago o rebaixaria para pendente.
+    let query = supabaseClient
+      .from('lancamentos_financeiros')
+      .update({ ...payload, status: vaiQuitar ? 'pendente' : statusPedido })
+      .eq('id', id);
     if (input.expectedUpdatedAt) query = query.eq('updated_at', input.expectedUpdatedAt);
     const { data, error } = await query.select('id');
     if (error) throw error;
     if (input.expectedUpdatedAt && (!data || !data.length)) {
       throw new ConcurrencyError('Este lançamento foi alterado por outra pessoa enquanto você editava. Recarregue a lista e tente novamente.');
+    }
+
+    if (vaiQuitar) {
+      await registrarPagamento(id, saldoRestante, { dataPagamento: input.dataPagamento, formaPagamento: input.formaPagamento });
+    } else if (vaiReabrir) {
+      await reabrirLancamento(id);
     }
   }
 
@@ -784,24 +825,44 @@ const HM = (function () {
   }
 
   /** Baixa (recebimento/pagamento) parcial ou total via RPC atômica —
-   * `registrar_pagamento` soma o valor dentro do próprio UPDATE no banco,
-   * então duas baixas simultâneas no mesmo lançamento nunca se perdem. */
-  async function registrarPagamento(id, valor, dataPagamento) {
+   * `registrar_pagamento` trava a linha, grava o evento no histórico e soma
+   * o acumulado numa transação só, então duas baixas simultâneas no mesmo
+   * lançamento nunca se perdem nem estouram o saldo. */
+  async function registrarPagamento(id, valor, { dataPagamento, formaPagamento, observacoes } = {}) {
     const { data, error } = await supabaseClient.rpc('registrar_pagamento', {
       p_id: id,
       p_valor: valor,
       p_data_pagamento: dataPagamento || new Date().toISOString().slice(0, 10),
+      p_forma_pagamento: formaPagamento || null,
+      p_observacoes: observacoes || null,
     });
     if (error) throw error;
     return mapLancamentoRow(data);
   }
 
-  /** Reabre uma cobrança/pagamento cancelado ou já baixado incorretamente —
-   * zera o valor pago e volta pro estado "pendente". */
+  /** Desfaz todas as baixas de um lançamento (apaga o histórico dele e volta
+   * pro estado "pendente") — usado quando uma cobrança foi baixada por engano. */
   async function reabrirLancamento(id) {
-    unwrap(await supabaseClient.from('lancamentos_financeiros')
-      .update({ status: 'pendente', valor_pago: 0, data_pagamento: null, updated_at: new Date().toISOString() })
-      .eq('id', id));
+    const { error } = await supabaseClient.rpc('reabrir_lancamento', { p_id: id });
+    if (error) throw error;
+  }
+
+  /** Histórico de baixas de um lançamento — um item por recebimento/pagamento. */
+  async function getPagamentosLancamento(lancamentoId) {
+    const rows = unwrap(await supabaseClient
+      .from('pagamentos_financeiros')
+      .select('id, valor, data_pagamento, forma_pagamento, observacoes, created_at')
+      .eq('lancamento_id', lancamentoId)
+      .order('data_pagamento', { ascending: false })
+      .order('created_at', { ascending: false }));
+    return rows.map(p => ({
+      id: p.id,
+      valor: Number(p.valor) || 0,
+      dataPagamento: p.data_pagamento,
+      formaPagamento: p.forma_pagamento,
+      observacoes: p.observacoes,
+      createdAt: p.created_at,
+    }));
   }
 
   async function getCategoriasFinanceiras(tipo) {
@@ -836,6 +897,30 @@ const HM = (function () {
     const row = unwrap(await supabaseClient.from('fornecedores').insert({ nome: input.nome, cpf_cnpj: input.cpfCnpj || null, telefone: input.telefone || null, categoria: input.categoria || null }).select('id').single());
     return row.id;
   }
+
+  /**
+   * Cliente/fornecedor criado sob demanda a partir do nome digitado no
+   * lançamento — mesmo comportamento de ensureMarca() no cadastro de
+   * veículos: o gestor não precisa parar pra cadastrar antes, e nomes
+   * repetidos reaproveitam o registro existente em vez de duplicar.
+   */
+  function criarEnsurePessoa(tabela) {
+    return async function ensurePessoa(nome) {
+      const nomeTrim = String(nome || '').trim();
+      if (!nomeTrim) return null;
+      const existente = unwrap(await supabaseClient.from(tabela).select('id').ilike('nome', nomeTrim).limit(1).maybeSingle());
+      if (existente) return existente.id;
+      const { data, error } = await supabaseClient.from(tabela).insert({ nome: nomeTrim }).select('id').single();
+      if (!error) return data.id;
+      if (error.code === '23505') {
+        const retry = unwrap(await supabaseClient.from(tabela).select('id').ilike('nome', nomeTrim).limit(1).maybeSingle());
+        if (retry) return retry.id;
+      }
+      throw error;
+    };
+  }
+  const ensureCliente = criarEnsurePessoa('clientes');
+  const ensureFornecedor = criarEnsurePessoa('fornecedores');
 
   /** Cards e séries do Dashboard Financeiro — uma única chamada RPC agregada
    * no banco, não baixa lançamento nenhum pro navegador pra somar aqui. */
@@ -1115,12 +1200,15 @@ const HM = (function () {
     deleteLancamento,
     registrarPagamento,
     reabrirLancamento,
+    getPagamentosLancamento,
     getCategoriasFinanceiras,
     createCategoriaFinanceira,
     getClientes,
     createCliente,
+    ensureCliente,
     getFornecedores,
     createFornecedor,
+    ensureFornecedor,
     getDashboardFinanceiro,
     formatDateBR,
     // interesse por veículo

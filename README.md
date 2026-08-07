@@ -93,6 +93,7 @@ Tabelas criadas por `supabase/schema.sql`:
 | `interacoes_veiculo` | Um evento por "visualização" (abriu o modal de detalhes) ou clique em WhatsApp — alimenta a coluna "Interesse" na tabela de veículos e o "Mais vistos" do dashboard. **Único caso de tabela com INSERT público** no projeto (o site é anônimo); a leitura continua restrita a quem está autenticado, então nenhum visitante vê os números de ninguém. Sem limitação de taxa — ver [Limitações conhecidas](#limitações-conhecidas). |
 | `emails_permitidos` | E-mails autorizados a concluir login social (Google) — ver [Como adicionar novos administradores](#como-adicionar-novos-administradores). Só administrador lê/escreve. |
 | `lancamentos_financeiros` | Ledger único do Financeiro (entradas e saídas) — ver [Módulo Financeiro](#módulo-financeiro). Restrito a gerente/administrador. |
+| `pagamentos_financeiros` | Um evento por baixa (recebimento/pagamento) de um lançamento — valor, data, forma e quem registrou. Só é gravada por `registrar_pagamento`; imutável depois de criada. |
 | `categorias_financeiras` | Categorias e subcategorias (entrada/saída) usadas pelos lançamentos financeiros. |
 | `clientes` / `fornecedores` | Cadastro leve (nome, CPF/CNPJ, telefone) referenciado opcionalmente pelos lançamentos — preparado para Contas a Receber/Pagar (fase futura). |
 
@@ -187,10 +188,17 @@ Cada card e o modal também mostram uma simulação de parcelamento ("a partir d
 
 ## Módulo Financeiro
 
-Fase 1 do setor financeiro — fundação de banco completa mais as duas telas
-mais centrais (Dashboard e Fluxo de Caixa). Contas a Receber/Pagar,
-Despesas, Receitas, Comissões, Relatórios (com exportação) e Backup
-Financeiro dedicado ainda não existem — ficam para as próximas fases.
+Seis telas prontas: Dashboard Financeiro, Fluxo de Caixa, Contas a Receber,
+Contas a Pagar, Despesas e Receitas. **Comissão de vendedores, Relatórios
+(com exportação PDF/Excel/CSV) e Backup Financeiro dedicado ainda não
+existem** — ficam para a próxima fase.
+
+As cinco telas de lista são a mesma tabela sob recortes diferentes, então
+existe **uma implementação só** no código: cada visão declara apenas o que a
+diferencia (filtros travados, colunas, rótulos) no descritor `FIN_VIEWS` em
+[assets/js/admin.js](assets/js/admin.js), e a fábrica `criarFinView()` monta
+a página inteira — filtros, tabela, paginação e ações. Acrescentar uma visão
+nova é acrescentar um item nesse objeto, não copiar uma página.
 
 - **Ledger único** (`lancamentos_financeiros`): entradas e saídas, com
   categoria/subcategoria, forma de pagamento, status (pago/pendente/
@@ -217,13 +225,22 @@ Financeiro dedicado ainda não existem — ficam para as próximas fases.
   despesa do mês, receitas e despesas por categoria), todos calculados no
   banco numa única chamada — o navegador não baixa os lançamentos um a um
   para somar.
-- **Limitação conhecida:** "Recebimentos/pagamentos do dia" no dashboard
-  são aproximados pela data da última baixa de cada lançamento — se um
-  lançamento recebeu mais de uma baixa parcial no mesmo dia, só a última
-  fica registrada nesse campo. Uma fase futura deve adicionar uma tabela
-  de histórico de pagamentos (um evento por baixa) para isso ficar exato,
-  a mesma tabela que também vai alimentar o "Histórico completo" de Contas
-  a Receber/Pagar.
+- **Histórico de baixas** (`pagamentos_financeiros`): cada recebimento ou
+  pagamento é um evento próprio (valor, data, forma, quem registrou), não
+  só um acumulado. É o que faz uma conta paga em três parcelas aparecer
+  corretamente em três meses diferentes no dashboard, em vez de cair
+  inteira no mês da última baixa. O histórico aparece no modal do
+  lançamento e é imutável depois de gravado, como a trilha de auditoria.
+  `valor_pago` nunca é escrito direto pelo navegador — toda baixa passa
+  por `registrar_pagamento`, inclusive quando um lançamento é criado já
+  marcado como "pago".
+- **Contas a Receber / Contas a Pagar** — a mesma lista, recortada por
+  tipo e vencimento: quem deve para a loja e o que a loja deve pagar, com
+  saldo em aberto, aviso de vencido e baixa parcial. O cliente/fornecedor
+  é criado sob demanda a partir do nome digitado (mesmo comportamento da
+  marca de um veículo), sem cadastro prévio obrigatório.
+- **Despesas / Receitas** — recorte por tipo (saída/entrada) com filtro
+  por categoria, forma de pagamento e período.
 
 ## Preview ao compartilhar (Edge Function)
 

@@ -159,7 +159,13 @@
   }
 
   /* ── NAVEGAÇÃO ── */
-  const titles = { dashboard: 'Dashboard', veiculos: 'Veículos', consignacoes: 'Consignações', 'fin-dashboard': 'Dashboard Financeiro', 'fin-fluxo': 'Fluxo de Caixa', usuarios: 'Usuários', logs: 'Logs', configuracoes: 'Configurações' };
+  const titles = {
+    dashboard: 'Dashboard', veiculos: 'Veículos', consignacoes: 'Consignações',
+    'fin-dashboard': 'Dashboard Financeiro', 'fin-fluxo': 'Fluxo de Caixa',
+    'fin-receber': 'Contas a Receber', 'fin-pagar': 'Contas a Pagar',
+    'fin-despesas': 'Despesas', 'fin-receitas': 'Receitas',
+    usuarios: 'Usuários', logs: 'Logs', configuracoes: 'Configurações',
+  };
   document.querySelectorAll('.nav-item[data-page]').forEach(btn => {
     btn.addEventListener('click', () => navigate(btn.dataset.page, btn));
   });
@@ -174,7 +180,7 @@
     if (page === 'usuarios') { renderUsersTable(); renderAllowedEmailsTable(); }
     if (page === 'logs') loadLogsPage(true);
     if (page === 'fin-dashboard') renderDashboardFinanceiro();
-    if (page === 'fin-fluxo') { if (!finCategoriasCarregadas) populateFinCategoriaFilters(); loadLancamentosPage(true); }
+    if (FIN_VIEWS[page]) abrirFinView(page);
   }
 
   const sidebar = document.getElementById('sidebar');
@@ -765,118 +771,326 @@
     }
   }
 
-  /* ── Fluxo de Caixa (lista paginada de lançamentos) ── */
-  let lancamentoState = { page: 0, pageSize: 25, search: '', tipo: '', status: '', formaPagamento: '', categoriaId: '', dataInicio: '', dataFim: '', rows: [], total: 0 };
-  let lancamentoRequestToken = 0;
+  /* ── VISÕES DO LEDGER ─────────────────────────────────────────────────
+   * Fluxo de Caixa, Contas a Receber, Contas a Pagar, Despesas e Receitas
+   * são a mesma tabela sob recortes diferentes — então existe uma
+   * implementação só. Cada visão declara apenas o que a diferencia
+   * (filtros travados, colunas, rótulos) e a fábrica lá embaixo monta a
+   * página inteira: barra de filtros, tabela, paginação e ações.
+   * ────────────────────────────────────────────────────────────────── */
+
+  /** Colunas disponíveis. Cada visão escolhe as suas em FIN_VIEWS.colunas. */
+  const FIN_COLUNAS = {
+    data: {
+      th: 'Data',
+      td: l => `<td class="fin-td-nowrap">${HM.formatDateBR(l.dataLancamento)}</td>`,
+    },
+    vencimento: {
+      th: 'Vencimento',
+      td: l => `<td class="fin-td-nowrap${l.vencida ? ' fin-valor-saida' : ''}">${l.dataVencimento ? HM.formatDateBR(l.dataVencimento) : '—'}</td>`,
+    },
+    descricao: {
+      th: 'Descrição',
+      td: l => `<td><div class="td-name">${escapeHtml(l.descricao)}</div>${l.formaPagamento ? `<div class="td-sub">${FIN_FORMA_LABELS[l.formaPagamento] || l.formaPagamento}</div>` : ''}</td>`,
+    },
+    categoria: {
+      th: 'Categoria',
+      td: l => `<td class="fin-td-muted">${escapeHtml(l.categoriaNome || '—')}</td>`,
+    },
+    pessoa: {
+      th: cfg => cfg.pessoa === 'cliente' ? 'Cliente' : 'Fornecedor',
+      td: (l, cfg) => `<td class="fin-td-muted">${escapeHtml((cfg.pessoa === 'cliente' ? l.clienteNome : l.fornecedorNome) || '—')}</td>`,
+    },
+    tipo: {
+      th: 'Tipo',
+      td: l => `<td><span class="badge ${l.tipo === 'entrada' ? 'badge-ativo' : 'badge-vendido'}">${l.tipo === 'entrada' ? 'Entrada' : 'Saída'}</span></td>`,
+    },
+    valor: {
+      th: 'Valor',
+      td: l => `<td class="fin-td-valor ${l.tipo === 'entrada' ? 'fin-valor-entrada' : 'fin-valor-saida'}">${l.tipo === 'entrada' ? '+' : '−'} ${HM.formatPrice(l.valor)}</td>`,
+    },
+    saldo: {
+      th: 'Em aberto',
+      td: l => `<td class="fin-td-valor">${l.saldo > 0 ? HM.formatPrice(l.saldo) : '—'}</td>`,
+    },
+    status: {
+      th: 'Status',
+      td: l => `<td>${lancamentoStatusBadge(l)}</td>`,
+    },
+  };
+
+  /** Filtros disponíveis (além da busca e do período, que toda visão tem). */
+  const FIN_FILTROS = {
+    tipo: { campo: 'tipo', rotulo: 'Filtrar por tipo', opcoes: [['', 'Entradas e saídas'], ['entrada', 'Entradas'], ['saida', 'Saídas']] },
+    status: { campo: 'status', rotulo: 'Filtrar por status', opcoes: [['', 'Todos os status'], ['pendente', 'Pendente'], ['pago', 'Pago'], ['cancelado', 'Cancelado']] },
+    categoria: { campo: 'categoriaId', rotulo: 'Filtrar por categoria', opcoes: [['', 'Todas as categorias']], dinamico: 'categorias' },
+    forma: {
+      campo: 'formaPagamento', rotulo: 'Filtrar por forma de pagamento',
+      opcoes: [['', 'Todas as formas'], ...Object.entries(FIN_FORMA_LABELS)],
+    },
+  };
+
+  const FIN_VIEWS = {
+    'fin-fluxo': {
+      titulo: 'Fluxo de Caixa',
+      novoLabel: 'Novo lançamento',
+      busca: 'Buscar por descrição...',
+      fixos: {},
+      padroes: {},
+      colunas: ['data', 'descricao', 'categoria', 'tipo', 'valor', 'status'],
+      filtros: ['tipo', 'status', 'categoria', 'forma'],
+      vazio: 'Nenhum lançamento encontrado.',
+    },
+    'fin-receber': {
+      titulo: 'Contas a Receber',
+      novoLabel: 'Nova cobrança',
+      busca: 'Buscar por descrição...',
+      hint: 'Valores que clientes ainda devem à loja. Use o botão de baixa (✓) para registrar um recebimento parcial ou total — cada recebimento fica no histórico do lançamento.',
+      fixos: { tipo: 'entrada' },
+      padroes: { tipo: 'entrada', status: 'pendente' },
+      pessoa: 'cliente',
+      colunas: ['vencimento', 'descricao', 'pessoa', 'valor', 'saldo', 'status'],
+      filtros: ['status', 'categoria'],
+      statusPadrao: 'pendente',
+      ordem: 'vencimento-proximo',
+      vazio: 'Nenhuma conta a receber neste filtro.',
+    },
+    'fin-pagar': {
+      titulo: 'Contas a Pagar',
+      novoLabel: 'Nova conta a pagar',
+      busca: 'Buscar por descrição...',
+      hint: 'Compromissos da loja com fornecedores, impostos, aluguel, funcionários e afins. Use o botão de baixa (✓) para registrar um pagamento parcial ou total.',
+      fixos: { tipo: 'saida' },
+      padroes: { tipo: 'saida', status: 'pendente' },
+      pessoa: 'fornecedor',
+      colunas: ['vencimento', 'descricao', 'pessoa', 'valor', 'saldo', 'status'],
+      filtros: ['status', 'categoria'],
+      statusPadrao: 'pendente',
+      ordem: 'vencimento-proximo',
+      vazio: 'Nenhuma conta a pagar neste filtro.',
+    },
+    'fin-despesas': {
+      titulo: 'Despesas',
+      novoLabel: 'Nova despesa',
+      busca: 'Buscar por descrição...',
+      fixos: { tipo: 'saida' },
+      padroes: { tipo: 'saida', status: 'pago' },
+      pessoa: 'fornecedor',
+      colunas: ['data', 'descricao', 'categoria', 'pessoa', 'valor', 'status'],
+      filtros: ['status', 'categoria', 'forma'],
+      vazio: 'Nenhuma despesa encontrada.',
+    },
+    'fin-receitas': {
+      titulo: 'Receitas',
+      novoLabel: 'Nova receita',
+      busca: 'Buscar por descrição...',
+      fixos: { tipo: 'entrada' },
+      padroes: { tipo: 'entrada', status: 'pago' },
+      pessoa: 'cliente',
+      colunas: ['data', 'descricao', 'categoria', 'pessoa', 'valor', 'status'],
+      filtros: ['status', 'categoria', 'forma'],
+      vazio: 'Nenhuma receita encontrada.',
+    },
+  };
+
   let finCategoriasCarregadas = false;
   let finCategoriasEntrada = [];
   let finCategoriasSaida = [];
-  let finSearchDebounceTimer;
+  const finViews = {};
+  let finViewAtiva = null;
 
-  async function populateFinCategoriaFilters() {
+  async function carregarCategoriasFinanceiras() {
+    if (finCategoriasCarregadas) return;
     try {
       const [entrada, saida] = await Promise.all([HM.getCategoriasFinanceiras('entrada'), HM.getCategoriasFinanceiras('saida')]);
       finCategoriasEntrada = entrada;
       finCategoriasSaida = saida;
       finCategoriasCarregadas = true;
-      const raizes = [...entrada, ...saida].filter(c => !c.categoria_pai_id).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
-      document.getElementById('finFilterCategoria').innerHTML = '<option value="">Todas as categorias</option>'
-        + raizes.map(c => `<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('');
     } catch (err) {
       console.error('[admin] Falha ao carregar categorias financeiras.', err);
     }
   }
 
-  document.getElementById('finSearch').addEventListener('input', e => {
-    clearTimeout(finSearchDebounceTimer);
-    const valor = e.target.value;
-    finSearchDebounceTimer = setTimeout(() => { lancamentoState.search = valor; loadLancamentosPage(true); }, 250);
-  });
-  document.getElementById('finFilterTipo').addEventListener('change', e => { lancamentoState.tipo = e.target.value; loadLancamentosPage(true); });
-  document.getElementById('finFilterStatus').addEventListener('change', e => { lancamentoState.status = e.target.value; loadLancamentosPage(true); });
-  document.getElementById('finFilterCategoria').addEventListener('change', e => { lancamentoState.categoriaId = e.target.value; loadLancamentosPage(true); });
-  document.getElementById('finFilterForma').addEventListener('change', e => { lancamentoState.formaPagamento = e.target.value; loadLancamentosPage(true); });
-  document.getElementById('finFilterInicio').addEventListener('change', e => { lancamentoState.dataInicio = e.target.value; loadLancamentosPage(true); });
-  document.getElementById('finFilterFim').addEventListener('change', e => { lancamentoState.dataFim = e.target.value; loadLancamentosPage(true); });
-  document.getElementById('lancamentoLoadMoreBtn').addEventListener('click', () => loadLancamentosPage(false));
-
-  async function loadLancamentosPage(reset) {
-    const requestToken = ++lancamentoRequestToken;
-    const pageToLoad = reset ? 0 : lancamentoState.page + 1;
-    const btn = document.getElementById('lancamentoLoadMoreBtn');
-    btn.disabled = true;
-    try {
-      const { rows, total } = await HM.getLancamentos({
-        page: pageToLoad, pageSize: lancamentoState.pageSize, search: lancamentoState.search,
-        tipo: lancamentoState.tipo, status: lancamentoState.status, formaPagamento: lancamentoState.formaPagamento,
-        categoriaId: lancamentoState.categoriaId, dataInicio: lancamentoState.dataInicio, dataFim: lancamentoState.dataFim,
-      });
-      if (requestToken !== lancamentoRequestToken) return;
-      lancamentoState.page = pageToLoad;
-      lancamentoState.rows = reset ? rows : lancamentoState.rows.concat(rows);
-      lancamentoState.total = total;
-      renderLancamentosTable();
-    } catch (err) {
-      if (requestToken !== lancamentoRequestToken) return;
-      console.error('[admin] Falha ao carregar lançamentos.', err);
-      toast('Não foi possível carregar o fluxo de caixa.', 'error');
-    } finally {
-      if (requestToken === lancamentoRequestToken) btn.disabled = false;
-    }
+  /** Categorias raiz que fazem sentido para a visão (só de entrada, só de
+   * saída, ou as duas quando a visão não trava o tipo). */
+  function finCategoriasDaVisao(cfg) {
+    const lista = cfg.fixos.tipo === 'entrada' ? finCategoriasEntrada
+      : cfg.fixos.tipo === 'saida' ? finCategoriasSaida
+      : [...finCategoriasEntrada, ...finCategoriasSaida];
+    return lista.filter(c => !c.categoria_pai_id).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   }
 
   function lancamentoStatusBadge(l) {
     if (l.status === 'cancelado') return `<span class="badge badge-inativo">Cancelado</span>`;
     if (l.status === 'pago') return `<span class="badge badge-ativo">Pago</span>`;
     if (l.vencida) return `<span class="badge badge-vencido">Vencido</span>`;
+    if (l.valorPago > 0) return `<span class="badge badge-negociando">Parcial</span>`;
     return `<span class="badge badge-negociando">Pendente</span>`;
   }
 
-  function lancamentoRowHtml(l) {
-    const podeExcluir = roleAtLeast('administrador');
+  function finViewShellHtml(key, cfg) {
+    const filtros = (cfg.filtros || []).map(nome => {
+      const f = FIN_FILTROS[nome];
+      const opcoes = f.dinamico === 'categorias'
+        ? [...f.opcoes, ...finCategoriasDaVisao(cfg).map(c => [c.id, c.nome])]
+        : f.opcoes;
+      const selecionada = cfg.statusPadrao && f.campo === 'status' ? cfg.statusPadrao : '';
+      return `
+        <label class="sr-only" for="${key}-f-${nome}">${f.rotulo}</label>
+        <select class="filter-select" id="${key}-f-${nome}">
+          ${opcoes.map(([v, t]) => `<option value="${escapeHtml(v)}"${v === selecionada ? ' selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+        </select>`;
+    }).join('');
+
+    const colunas = cfg.colunas.map(c => FIN_COLUNAS[c]);
+    const ths = colunas.map(c => `<th scope="col">${escapeHtml(typeof c.th === 'function' ? c.th(cfg) : c.th)}</th>`).join('');
+
     return `
-      <tr>
-        <td style="white-space:nowrap;font-size:12px;color:var(--gray)">${HM.formatDateBR(l.dataLancamento)}</td>
-        <td><div class="td-name">${escapeHtml(l.descricao)}</div>${l.formaPagamento ? `<div class="td-sub">${FIN_FORMA_LABELS[l.formaPagamento] || l.formaPagamento}</div>` : ''}</td>
-        <td style="font-size:12px;color:var(--gray)">${escapeHtml(l.categoriaNome || '—')}</td>
-        <td><span class="badge ${l.tipo === 'entrada' ? 'badge-ativo' : 'badge-vendido'}">${l.tipo === 'entrada' ? 'Entrada' : 'Saída'}</span></td>
-        <td class="${l.tipo === 'entrada' ? 'fin-valor-entrada' : 'fin-valor-saida'}" style="font-weight:700">${l.tipo === 'entrada' ? '+' : '−'} ${HM.formatPrice(l.valor)}</td>
-        <td>${lancamentoStatusBadge(l)}</td>
-        <td>
-          <div class="actions">
-            ${l.status === 'pendente' ? `<button class="btn-icon toggle" type="button" data-baixa="${l.id}" aria-label="Registrar pagamento de ${escapeHtml(l.descricao)}">${ICON_CHECK}</button>` : ''}
-            ${l.status === 'pago' ? `<button class="btn-icon" type="button" data-reabrir="${l.id}" data-label="${escapeHtml(l.descricao)}" aria-label="Reabrir cobrança de ${escapeHtml(l.descricao)}">${ICON_UNDO}</button>` : ''}
-            <button class="btn-icon edit" type="button" data-fin-edit="${l.id}" aria-label="Editar ${escapeHtml(l.descricao)}">${ICON_EDIT}</button>
-            ${podeExcluir ? `<button class="btn-icon del" type="button" data-fin-del="${l.id}" data-label="${escapeHtml(l.descricao)}" aria-label="Excluir ${escapeHtml(l.descricao)}">${ICON_DEL}</button>` : ''}
-          </div>
-        </td>
-      </tr>`;
+      <div class="section-header">
+        <h1 class="section-title">${escapeHtml(cfg.titulo)}</h1>
+        <button class="btn-primary" id="${key}-novo" type="button">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          ${escapeHtml(cfg.novoLabel)}
+        </button>
+      </div>
+      ${cfg.hint ? `<p class="page-hint">${escapeHtml(cfg.hint)}</p>` : ''}
+      <div class="search-bar">
+        <label class="sr-only" for="${key}-search">Buscar em ${escapeHtml(cfg.titulo)}</label>
+        <input class="search-input" id="${key}-search" placeholder="${escapeHtml(cfg.busca)}">
+        ${filtros}
+        <label class="sr-only" for="${key}-inicio">Data inicial</label>
+        <input class="search-input fin-date-input" id="${key}-inicio" type="date" title="Data inicial">
+        <label class="sr-only" for="${key}-fim">Data final</label>
+        <input class="search-input fin-date-input" id="${key}-fim" type="date" title="Data final">
+      </div>
+      <div class="table-wrap">
+        <table>
+          <caption class="sr-only">${escapeHtml(cfg.titulo)}</caption>
+          <thead><tr>${ths}<th scope="col">Ações</th></tr></thead>
+          <tbody id="${key}-tbody" aria-live="polite"></tbody>
+        </table>
+      </div>
+      <div class="list-footer">
+        <span class="list-count" id="${key}-count"></span>
+        <button class="btn-secondary" id="${key}-more" type="button" hidden>Carregar mais</button>
+      </div>`;
   }
 
-  function renderLancamentosTable() {
-    const ls = lancamentoState.rows;
-    const tbody = document.getElementById('lancamentoTableBody');
-    if (!ls.length) {
-      tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><p>Nenhum lançamento encontrado.</p></div></td></tr>`;
-    } else {
-      tbody.innerHTML = ls.map(lancamentoRowHtml).join('');
-      tbody.querySelectorAll('[data-fin-edit]').forEach(b => b.addEventListener('click', () => openLancamentoModal(b.dataset.finEdit, b)));
-      tbody.querySelectorAll('[data-fin-del]').forEach(b => b.addEventListener('click', () => confirmDelete('lancamento', b.dataset.finDel, b.dataset.label, b)));
-      tbody.querySelectorAll('[data-baixa]').forEach(b => b.addEventListener('click', () => openBaixaModal(b.dataset.baixa, b)));
-      tbody.querySelectorAll('[data-reabrir]').forEach(b => b.addEventListener('click', () => reabrirLancamento(b.dataset.reabrir, b.dataset.label)));
+  /**
+   * Monta uma visão do ledger dentro da sua seção e devolve o controlador.
+   * Cada visão tem seu próprio estado, seu próprio token de requisição
+   * (respostas atrasadas de um filtro antigo são descartadas) e sua própria
+   * paginação — trocar de página no menu não embaralha os resultados.
+   */
+  function criarFinView(key, cfg) {
+    const secao = document.getElementById('page-' + key);
+    secao.innerHTML = finViewShellHtml(key, cfg);
+
+    const colunas = cfg.colunas.map(c => FIN_COLUNAS[c]);
+    const el = sufixo => document.getElementById(`${key}-${sufixo}`);
+    const state = {
+      page: 0, pageSize: 25, search: '',
+      tipo: '', status: cfg.statusPadrao || '', formaPagamento: '', categoriaId: '',
+      dataInicio: '', dataFim: '', rows: [], total: 0,
+    };
+    let token = 0;
+    let debounceBusca;
+
+    el('search').addEventListener('input', e => {
+      clearTimeout(debounceBusca);
+      const valor = e.target.value;
+      debounceBusca = setTimeout(() => { state.search = valor; load(true); }, 250);
+    });
+    (cfg.filtros || []).forEach(nome => {
+      el('f-' + nome).addEventListener('change', e => { state[FIN_FILTROS[nome].campo] = e.target.value; load(true); });
+    });
+    el('inicio').addEventListener('change', e => { state.dataInicio = e.target.value; load(true); });
+    el('fim').addEventListener('change', e => { state.dataFim = e.target.value; load(true); });
+    el('more').addEventListener('click', () => load(false));
+    el('novo').addEventListener('click', e => openLancamentoModal(null, e.currentTarget, cfg.padroes));
+
+    async function load(reset) {
+      const requestToken = ++token;
+      const pageToLoad = reset ? 0 : state.page + 1;
+      const btnMais = el('more');
+      btnMais.disabled = true;
+      try {
+        const { rows, total } = await HM.getLancamentos({
+          page: pageToLoad, pageSize: state.pageSize, search: state.search,
+          tipo: state.tipo, status: state.status, formaPagamento: state.formaPagamento,
+          categoriaId: state.categoriaId, dataInicio: state.dataInicio, dataFim: state.dataFim,
+          orderBy: cfg.ordem || 'recentes',
+          ...cfg.fixos,
+        });
+        if (requestToken !== token) return;
+        state.page = pageToLoad;
+        state.rows = reset ? rows : state.rows.concat(rows);
+        state.total = total;
+        render();
+      } catch (err) {
+        if (requestToken !== token) return;
+        console.error(`[admin] Falha ao carregar ${cfg.titulo}.`, err);
+        toast(`Não foi possível carregar ${cfg.titulo}.`, 'error');
+      } finally {
+        if (requestToken === token) btnMais.disabled = false;
+      }
     }
-    document.getElementById('lancamentoListCount').textContent = ls.length ? `Mostrando ${ls.length} de ${lancamentoState.total}` : '';
-    document.getElementById('lancamentoLoadMoreBtn').hidden = ls.length >= lancamentoState.total;
+
+    function render() {
+      const tbody = el('tbody');
+      const linhas = state.rows;
+      if (!linhas.length) {
+        tbody.innerHTML = `<tr><td colspan="${colunas.length + 1}"><div class="empty-state"><p>${escapeHtml(cfg.vazio)}</p></div></td></tr>`;
+      } else {
+        const podeExcluir = roleAtLeast('administrador');
+        tbody.innerHTML = linhas.map(l => `
+          <tr>
+            ${colunas.map(c => c.td(l, cfg)).join('')}
+            <td>
+              <div class="actions">
+                ${l.saldo > 0 && l.status !== 'cancelado' ? `<button class="btn-icon toggle" type="button" data-baixa="${l.id}" aria-label="Registrar baixa de ${escapeHtml(l.descricao)}">${ICON_CHECK}</button>` : ''}
+                ${l.valorPago > 0 ? `<button class="btn-icon" type="button" data-reabrir="${l.id}" data-label="${escapeHtml(l.descricao)}" aria-label="Reabrir ${escapeHtml(l.descricao)}">${ICON_UNDO}</button>` : ''}
+                <button class="btn-icon edit" type="button" data-fin-edit="${l.id}" aria-label="Editar ${escapeHtml(l.descricao)}">${ICON_EDIT}</button>
+                ${podeExcluir ? `<button class="btn-icon del" type="button" data-fin-del="${l.id}" data-label="${escapeHtml(l.descricao)}" aria-label="Excluir ${escapeHtml(l.descricao)}">${ICON_DEL}</button>` : ''}
+              </div>
+            </td>
+          </tr>`).join('');
+        tbody.querySelectorAll('[data-fin-edit]').forEach(b => b.addEventListener('click', () => openLancamentoModal(b.dataset.finEdit, b)));
+        tbody.querySelectorAll('[data-fin-del]').forEach(b => b.addEventListener('click', () => confirmDelete('lancamento', b.dataset.finDel, b.dataset.label, b)));
+        tbody.querySelectorAll('[data-baixa]').forEach(b => b.addEventListener('click', () => openBaixaModal(b.dataset.baixa, b)));
+        tbody.querySelectorAll('[data-reabrir]').forEach(b => b.addEventListener('click', () => reabrirLancamento(b.dataset.reabrir, b.dataset.label)));
+      }
+      el('count').textContent = linhas.length ? `Mostrando ${linhas.length} de ${state.total}` : '';
+      el('more').hidden = linhas.length >= state.total;
+    }
+
+    return { load, render, state, cfg };
+  }
+
+  /** Abre (criando na primeira vez) a visão financeira de uma página. */
+  async function abrirFinView(key) {
+    await carregarCategoriasFinanceiras();
+    if (!finViews[key]) finViews[key] = criarFinView(key, FIN_VIEWS[key]);
+    finViewAtiva = key;
+    finViews[key].load(true);
+  }
+
+  /** Recarrega a visão financeira aberta no momento — usada depois de
+   * salvar, dar baixa ou excluir. O dashboard não precisa ser atualizado
+   * aqui: ele já recarrega sozinho toda vez que é aberto pelo menu. */
+  async function recarregarFinViewAtiva() {
+    const view = finViewAtiva && finViews[finViewAtiva];
+    if (view) await view.load(true);
   }
 
   async function reabrirLancamento(id, label) {
     try {
       await HM.reabrirLancamento(id);
-      await loadLancamentosPage(true);
-      toast(`Cobrança de "${label}" reaberta.`, 'success');
+      await recarregarFinViewAtiva();
+      toast(`"${label}" reaberto — as baixas anteriores foram desfeitas.`, 'success');
     } catch (err) {
       console.error('[admin] Falha ao reabrir lançamento.', err);
-      toast('Não foi possível reabrir esta cobrança.', 'error');
+      toast('Não foi possível reabrir este lançamento.', 'error');
     }
   }
 
@@ -884,7 +1098,6 @@
   const lancamentoOverlay = document.getElementById('lancamentoModalOverlay');
   let finTipoAtual = 'entrada';
 
-  document.getElementById('newLancamentoBtn').addEventListener('click', e => openLancamentoModal(null, e.currentTarget));
   document.getElementById('lancamentoModalCloseBtn').addEventListener('click', closeLancamentoModal);
   document.getElementById('lancamentoCancelBtn').addEventListener('click', closeLancamentoModal);
   document.getElementById('lancamentoSaveBtn').addEventListener('click', saveLancamento);
@@ -899,7 +1112,36 @@
     document.getElementById('lTipoEntradaBtn').setAttribute('aria-pressed', String(tipo === 'entrada'));
     document.getElementById('lTipoSaidaBtn').classList.toggle('active', tipo === 'saida');
     document.getElementById('lTipoSaidaBtn').setAttribute('aria-pressed', String(tipo === 'saida'));
+    // Entrada vem de um cliente, saída vai para um fornecedor — o mesmo
+    // campo troca de papel conforme o tipo, em vez de exibir os dois.
+    document.getElementById('lPessoaLabel').textContent = tipo === 'entrada' ? 'Cliente' : 'Fornecedor';
+    document.getElementById('lPessoa').placeholder = tipo === 'entrada' ? 'Nome do cliente (opcional)' : 'Nome do fornecedor (opcional)';
+    atualizarSugestoesPessoa();
     populateLancamentoCategoriaSelect();
+  }
+
+  /** Preenche o datalist do campo cliente/fornecedor. Como o cadastro é
+   * criado sob demanda ao salvar (igual à marca de um veículo), a lista é
+   * só uma sugestão — o gestor pode digitar um nome novo. */
+  async function atualizarSugestoesPessoa() {
+    const dl = document.getElementById('lPessoaLista');
+    try {
+      const pessoas = finTipoAtual === 'entrada' ? await HM.getClientes() : await HM.getFornecedores();
+      dl.innerHTML = pessoas.map(p => `<option value="${escapeHtml(p.nome)}"></option>`).join('');
+    } catch (err) {
+      console.error('[admin] Falha ao carregar sugestões de cliente/fornecedor.', err);
+      dl.innerHTML = '';
+    }
+  }
+
+  /** Procura um lançamento entre os já carregados em qualquer visão aberta,
+   * evitando uma ida ao servidor quando a linha veio da tabela. */
+  function acharLancamentoCarregado(id) {
+    for (const view of Object.values(finViews)) {
+      const encontrado = view.state.rows.find(x => x.id === id);
+      if (encontrado) return encontrado;
+    }
+    return null;
   }
 
   function populateLancamentoCategoriaSelect(categoriaIdSelecionada, subcategoriaIdSelecionada) {
@@ -918,22 +1160,26 @@
     subSel.closest('.field').hidden = subs.length === 0;
   }
 
-  async function openLancamentoModal(id, triggerEl) {
-    if (!finCategoriasCarregadas) await populateFinCategoriaFilters();
+  /** `padroes` vem da visão que abriu o modal (Contas a Pagar já começa
+   * como saída pendente, Receitas como entrada paga, e assim por diante),
+   * pra ninguém precisar reconfigurar o óbvio a cada lançamento. */
+  async function openLancamentoModal(id, triggerEl, padroes = {}) {
+    await carregarCategoriasFinanceiras();
     lastFocusedEl = triggerEl || document.activeElement;
     document.getElementById('lancamentoFormError').textContent = '';
     document.getElementById('lValorPagoHint').hidden = true;
+    document.getElementById('lHistoricoWrap').hidden = true;
 
-    ['lId', 'lUpdatedAt', 'lNumeroDocumento', 'lObservacoes', 'lValor', 'lDataVencimento', 'lFormaPagamento'].forEach(f => { document.getElementById(f).value = ''; });
+    ['lId', 'lUpdatedAt', 'lNumeroDocumento', 'lObservacoes', 'lValor', 'lDataVencimento', 'lFormaPagamento', 'lPessoa', 'lCentroCusto'].forEach(f => { document.getElementById(f).value = ''; });
     document.getElementById('lDataLancamento').value = new Date().toISOString().slice(0, 10);
-    document.getElementById('lStatus').value = 'pendente';
+    document.getElementById('lStatus').value = padroes.status || 'pendente';
     document.getElementById('lOrigem').value = 'manual';
     document.getElementById('lDescricao').value = '';
-    setLancamentoTipo('entrada');
+    setLancamentoTipo(padroes.tipo || 'entrada');
     document.getElementById('lancamentoModalTitle').textContent = id ? 'Editar Lançamento' : 'Novo Lançamento';
 
     if (id) {
-      const l = lancamentoState.rows.find(x => x.id === id) || await HM.getLancamentoById(id);
+      const l = acharLancamentoCarregado(id) || await HM.getLancamentoById(id);
       if (!l) return;
       document.getElementById('lId').value = l.id;
       document.getElementById('lUpdatedAt').value = l.updatedAt || '';
@@ -945,18 +1191,43 @@
       document.getElementById('lStatus').value = l.status;
       document.getElementById('lOrigem').value = l.origem;
       document.getElementById('lNumeroDocumento').value = l.numeroDocumento || '';
+      document.getElementById('lCentroCusto').value = l.centroCusto || '';
       document.getElementById('lObservacoes').value = l.observacoes || '';
       setLancamentoTipo(l.tipo);
+      document.getElementById('lPessoa').value = (l.tipo === 'entrada' ? l.clienteNome : l.fornecedorNome) || '';
       populateLancamentoCategoriaSelect(l.categoriaId, l.subcategoriaId);
       if (l.valorPago > 0 && l.valorPago < l.valor) {
         const hint = document.getElementById('lValorPagoHint');
         hint.hidden = false;
-        hint.textContent = `Já foi baixado ${HM.formatPrice(l.valorPago)} deste lançamento (saldo em aberto: ${HM.formatPrice(l.saldo)}). Para dar mais uma baixa, use "Registrar pagamento" na lista em vez de editar o valor aqui.`;
+        hint.textContent = `Já foi baixado ${HM.formatPrice(l.valorPago)} deste lançamento (saldo em aberto: ${HM.formatPrice(l.saldo)}). Para registrar mais uma baixa, use o botão ✓ na lista em vez de mexer no valor aqui.`;
       }
+      if (l.valorPago > 0) carregarHistoricoPagamentos(l.id);
     }
     openModal(lancamentoOverlay, document.getElementById('lDescricao'));
   }
   function closeLancamentoModal() { closeModalEl(lancamentoOverlay); }
+
+  async function carregarHistoricoPagamentos(lancamentoId) {
+    const wrap = document.getElementById('lHistoricoWrap');
+    const lista = document.getElementById('lHistoricoList');
+    wrap.hidden = false;
+    lista.innerHTML = '<li class="log-empty">Carregando…</li>';
+    try {
+      const pagamentos = await HM.getPagamentosLancamento(lancamentoId);
+      lista.innerHTML = pagamentos.length
+        ? pagamentos.map(p => `
+          <li>
+            <strong>${HM.formatPrice(p.valor)}</strong>
+            ${p.formaPagamento ? `· ${escapeHtml(FIN_FORMA_LABELS[p.formaPagamento] || p.formaPagamento)}` : ''}
+            <span style="float:right;color:var(--gray)">${HM.formatDateBR(p.dataPagamento)}</span>
+            ${p.observacoes ? `<div class="td-sub">${escapeHtml(p.observacoes)}</div>` : ''}
+          </li>`).join('')
+        : '<li class="log-empty">Nenhuma baixa registrada ainda.</li>';
+    } catch (err) {
+      console.error('[admin] Falha ao carregar histórico de pagamentos.', err);
+      lista.innerHTML = '<li class="log-empty">Não foi possível carregar o histórico.</li>';
+    }
+  }
 
   async function saveLancamento() {
     const descricao = document.getElementById('lDescricao').value.trim();
@@ -968,27 +1239,35 @@
 
     const editId = document.getElementById('lId').value;
     const status = document.getElementById('lStatus').value;
-    const valor = HM.parsePrice(valorStr);
-    const data = {
-      tipo: finTipoAtual,
-      descricao,
-      valor,
-      valorPago: status === 'pago' ? valor : 0,
-      categoriaId: document.getElementById('lCategoria').value || null,
-      subcategoriaId: document.getElementById('lSubcategoria').value || null,
-      dataLancamento: document.getElementById('lDataLancamento').value || null,
-      dataVencimento: document.getElementById('lDataVencimento').value || null,
-      dataPagamento: status === 'pago' ? new Date().toISOString().slice(0, 10) : null,
-      formaPagamento: document.getElementById('lFormaPagamento').value || null,
-      status,
-      origem: document.getElementById('lOrigem').value,
-      numeroDocumento: document.getElementById('lNumeroDocumento').value.trim(),
-      observacoes: document.getElementById('lObservacoes').value.trim(),
-    };
-
     const saveBtn = document.getElementById('lancamentoSaveBtn');
     saveBtn.disabled = true;
     try {
+      // Cliente/fornecedor é criado sob demanda a partir do nome digitado,
+      // do mesmo jeito que a marca de um veículo — sem cadastro prévio.
+      const nomePessoa = document.getElementById('lPessoa').value.trim();
+      const pessoaId = nomePessoa
+        ? await (finTipoAtual === 'entrada' ? HM.ensureCliente(nomePessoa) : HM.ensureFornecedor(nomePessoa))
+        : null;
+
+      const data = {
+        tipo: finTipoAtual,
+        descricao,
+        valor: HM.parsePrice(valorStr),
+        categoriaId: document.getElementById('lCategoria').value || null,
+        subcategoriaId: document.getElementById('lSubcategoria').value || null,
+        dataLancamento: document.getElementById('lDataLancamento').value || null,
+        dataVencimento: document.getElementById('lDataVencimento').value || null,
+        dataPagamento: document.getElementById('lDataLancamento').value || null,
+        formaPagamento: document.getElementById('lFormaPagamento').value || null,
+        status,
+        origem: document.getElementById('lOrigem').value,
+        clienteId: finTipoAtual === 'entrada' ? pessoaId : null,
+        fornecedorId: finTipoAtual === 'saida' ? pessoaId : null,
+        numeroDocumento: document.getElementById('lNumeroDocumento').value.trim(),
+        centroCusto: document.getElementById('lCentroCusto').value.trim(),
+        observacoes: document.getElementById('lObservacoes').value.trim(),
+      };
+
       if (editId) {
         data.expectedUpdatedAt = document.getElementById('lUpdatedAt').value || null;
         await HM.updateLancamento(editId, data);
@@ -997,7 +1276,7 @@
         await HM.createLancamento(data);
         toast('Lançamento registrado!', 'success');
       }
-      await Promise.all([loadLancamentosPage(true), renderDashboardFinanceiro()]);
+      await recarregarFinViewAtiva();
       closeLancamentoModal();
     } catch (err) {
       console.error('[admin] Falha ao salvar lançamento.', err);
@@ -1010,34 +1289,46 @@
   /* ── Modal de baixa (recebimento/pagamento parcial ou total) ── */
   const baixaOverlay = document.getElementById('baixaModalOverlay');
   let baixaLancamentoId = null;
+  let baixaSaldoAtual = 0;
 
   document.getElementById('baixaCancelBtn').addEventListener('click', closeBaixaModal);
   document.getElementById('baixaConfirmBtn').addEventListener('click', confirmBaixa);
   baixaOverlay.addEventListener('click', e => { if (e.target === e.currentTarget) closeBaixaModal(); });
 
   function openBaixaModal(id, triggerEl) {
-    const l = lancamentoState.rows.find(x => x.id === id);
+    const l = acharLancamentoCarregado(id);
     if (!l) return;
     baixaLancamentoId = id;
+    baixaSaldoAtual = l.saldo;
     lastFocusedEl = triggerEl || document.activeElement;
     document.getElementById('baixaModalTitle').textContent = l.tipo === 'entrada' ? 'Registrar recebimento' : 'Registrar pagamento';
-    document.getElementById('baixaModalSaldo').textContent = `Saldo em aberto: ${HM.formatPrice(l.saldo)} de ${HM.formatPrice(l.valor)}`;
+    document.getElementById('baixaModalSaldo').textContent = `${escapeHtml(l.descricao)} — em aberto ${HM.formatPrice(l.saldo)} de ${HM.formatPrice(l.valor)}`;
     document.getElementById('baixaValor').value = HM.formatPrice(l.saldo);
     document.getElementById('baixaData').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('baixaForma').value = l.formaPagamento || '';
+    document.getElementById('baixaObs').value = '';
     document.getElementById('baixaFormError').textContent = '';
     openModal(baixaOverlay, document.getElementById('baixaValor'));
   }
-  function closeBaixaModal() { closeModalEl(baixaOverlay); baixaLancamentoId = null; }
+  function closeBaixaModal() { closeModalEl(baixaOverlay); baixaLancamentoId = null; baixaSaldoAtual = 0; }
 
   async function confirmBaixa() {
     const errEl = document.getElementById('baixaFormError');
     const valor = HM.parsePrice(document.getElementById('baixaValor').value);
     if (valor <= 0) { errEl.textContent = 'Informe um valor maior que zero.'; return; }
+    if (valor > baixaSaldoAtual) {
+      errEl.textContent = `O valor não pode passar do saldo em aberto (${HM.formatPrice(baixaSaldoAtual)}).`;
+      return;
+    }
     const btn = document.getElementById('baixaConfirmBtn');
     btn.disabled = true;
     try {
-      await HM.registrarPagamento(baixaLancamentoId, valor, document.getElementById('baixaData').value || null);
-      await Promise.all([loadLancamentosPage(true), renderDashboardFinanceiro()]);
+      await HM.registrarPagamento(baixaLancamentoId, valor, {
+        dataPagamento: document.getElementById('baixaData').value || null,
+        formaPagamento: document.getElementById('baixaForma').value || null,
+        observacoes: document.getElementById('baixaObs').value.trim() || null,
+      });
+      await recarregarFinViewAtiva();
       closeBaixaModal();
       toast('Baixa registrada!', 'success');
     } catch (err) {
@@ -1079,7 +1370,7 @@
         toast('Consignação excluída.', 'success');
       } else if (type === 'lancamento') {
         await HM.deleteLancamento(id);
-        await loadLancamentosPage(true);
+        await recarregarFinViewAtiva();
         toast('Lançamento excluído.', 'success');
       }
       if (type === 'vehicle' || type === 'consig') await renderDashboard();
