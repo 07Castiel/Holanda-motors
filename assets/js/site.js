@@ -17,6 +17,9 @@
   let cfg = null;
   let catalogState = { page: 0, pageSize: 9, filter: 'todos', marcaId: '', precoMin: null, precoMax: null, orderBy: 'recentes', rows: [], total: 0 };
   let lastFocusedEl = null;
+  let heroVehicles = [];
+  let heroIndex = 0;
+  let heroTimer = null;
 
   /**
    * Link de um veículo específico feito pra ser compartilhado (WhatsApp,
@@ -42,12 +45,18 @@
     return valorFinanciado * (i * fator) / (fator - 1);
   }
 
-  /** "48x de R$ 2.850,00", usando a entrada padrão e o máximo de parcelas configurados — a menor parcela possível, pra teaser no card. */
-  function menorParcelaTexto(precoNumerico) {
+  /** Motos e carros têm prazo máximo de financiamento diferente na prática (ex: motos até 48x, carros até 60x) — configurável separadamente em Configurações. */
+  function maxParcelasFor(tipo) {
+    return tipo === 'moto' ? cfg.parcelamentoMaxParcelasMoto : cfg.parcelamentoMaxParcelasCarro;
+  }
+
+  /** "48x de R$ 2.850,00", usando a entrada padrão e o máximo de parcelas do tipo do veículo — a menor parcela possível, pra teaser no card. */
+  function menorParcelaTexto(precoNumerico, tipo) {
+    const maxParcelas = maxParcelasFor(tipo);
     const entrada = precoNumerico * (cfg.parcelamentoEntrada / 100);
     const financiado = precoNumerico - entrada;
-    const parcela = calcularParcela(financiado, cfg.parcelamentoJuros, cfg.parcelamentoMaxParcelas);
-    return `ou ${cfg.parcelamentoMaxParcelas}x de ${HM.formatPrice(parcela)}`;
+    const parcela = calcularParcela(financiado, cfg.parcelamentoJuros, maxParcelas);
+    return `ou ${maxParcelas}x de ${HM.formatPrice(parcela)}`;
   }
 
   const PARCELA_OPCOES = [12, 18, 24, 36, 48, 60, 72, 84, 96, 108, 120];
@@ -64,11 +73,12 @@
 
     document.getElementById('modalEntrada').value = Math.round(v.precoNumerico * (cfg.parcelamentoEntrada / 100));
 
-    const opcoes = PARCELA_OPCOES.filter(n => n <= cfg.parcelamentoMaxParcelas);
-    if (!opcoes.includes(cfg.parcelamentoMaxParcelas)) opcoes.push(cfg.parcelamentoMaxParcelas);
+    const maxParcelas = maxParcelasFor(v.tipo);
+    const opcoes = PARCELA_OPCOES.filter(n => n <= maxParcelas);
+    if (!opcoes.includes(maxParcelas)) opcoes.push(maxParcelas);
     const parcelasSelect = document.getElementById('modalParcelas');
     parcelasSelect.innerHTML = opcoes.map(n => `<option value="${n}">${n}x</option>`).join('');
-    parcelasSelect.value = String(cfg.parcelamentoMaxParcelas);
+    parcelasSelect.value = String(maxParcelas);
 
     updateInstallmentResult();
   }
@@ -132,19 +142,44 @@
     return match ? `(${match[1]}) ${match[2]}-${match[3]}` : digits;
   }
 
-  /* ── HERO dinâmico: mostra o veículo em destaque (ou o mais recente) — busca só um registro, não o catálogo inteiro ── */
+  /* ── HERO dinâmico: alterna entre todos os veículos ativos/visíveis, não fica preso a um único "destaque" ── */
   async function renderHero() {
     const wrap = document.getElementById('heroVisual');
     if (!cfg.hero) { wrap.style.display = 'none'; return; }
-    let featured;
+    if (heroTimer) { clearInterval(heroTimer); heroTimer = null; }
     try {
-      featured = await HM.getFeaturedVehicle();
+      // pageSize alto o bastante para cobrir o estoque inteiro de uma concessionária real,
+      // sem baixar um catálogo potencialmente enorme como se fosse a listagem paginada.
+      const { rows } = await HM.getVehicles({ ativo: true, vendido: false, pageSize: 100, orderBy: 'recentes' });
+      heroVehicles = rows;
     } catch (err) {
-      console.error('[site] Falha ao carregar veículo em destaque.', err);
+      console.error('[site] Falha ao carregar veículos para o hero.', err);
       wrap.style.display = 'none';
       return;
     }
-    if (!featured) { wrap.style.display = 'none'; return; }
+    if (!heroVehicles.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = '';
+    heroIndex = 0;
+    renderHeroCard(heroVehicles[heroIndex]);
+    if (heroVehicles.length > 1) {
+      heroTimer = setInterval(advanceHero, 6000);
+    }
+  }
+
+  /** Troca o card do hero pelo próximo veículo com um crossfade — chamada pelo timer de rotação. */
+  function advanceHero() {
+    const wrap = document.getElementById('heroVisual');
+    const card = wrap.querySelector('.hero-car-card');
+    if (!card) return;
+    card.classList.add('hero-fade-out');
+    setTimeout(() => {
+      heroIndex = (heroIndex + 1) % heroVehicles.length;
+      renderHeroCard(heroVehicles[heroIndex]);
+    }, 350);
+  }
+
+  function renderHeroCard(featured) {
+    const wrap = document.getElementById('heroVisual');
     wrap.innerHTML = `
       <div class="hero-car-card">
         <div class="hero-car-img">
@@ -231,7 +266,7 @@
           <li class="vehicle-spec">${escapeHtml(v.cambio)}</li>
         </ul>
         <p class="vehicle-price">${escapeHtml(v.price)}</p>
-        ${cfg.parcelamentoAtivo && v.precoNumerico > 0 ? `<p class="vehicle-installment">${escapeHtml(menorParcelaTexto(v.precoNumerico))}</p>` : ''}
+        ${cfg.parcelamentoAtivo && v.precoNumerico > 0 ? `<p class="vehicle-installment">${escapeHtml(menorParcelaTexto(v.precoNumerico, v.tipo))}</p>` : ''}
         <div class="vehicle-actions">
           <button class="v-btn-detail" data-detail="${v.id}">Ver detalhes</button>
           <a href="${HM.wppLink(wppMsg, cfg.wpp)}" target="_blank" class="v-btn-wpp" data-wpp-veiculo="${v.id}">

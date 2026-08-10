@@ -156,7 +156,8 @@ const HM = (function () {
       parcelamentoAtivo: row.parcelamento_ativo,
       parcelamentoJuros: Number(row.parcelamento_juros_mensal),
       parcelamentoEntrada: Number(row.parcelamento_entrada_padrao),
-      parcelamentoMaxParcelas: row.parcelamento_max_parcelas,
+      parcelamentoMaxParcelasCarro: row.parcelamento_max_parcelas_carro,
+      parcelamentoMaxParcelasMoto: row.parcelamento_max_parcelas_moto,
     };
   }
 
@@ -378,15 +379,6 @@ const HM = (function () {
     return { rows: data.map(mapVehicleRow), total: count || 0, page, pageSize };
   }
 
-  /** Um único veículo em destaque para o hero do site (ou o mais recente, se nenhum estiver marcado) — evita baixar o catálogo inteiro só para montar o hero. */
-  async function getFeaturedVehicle() {
-    const select = '*, marcas(nome), categorias(slug), midias_veiculo(id, url, principal)';
-    const destaque = unwrap(await supabaseClient.from('veiculos').select(select).eq('ativo', true).eq('vendido', false).eq('badge', 'destaque').limit(1).maybeSingle());
-    if (destaque) return mapVehicleRow(destaque);
-    const recente = unwrap(await supabaseClient.from('veiculos').select(select).eq('ativo', true).eq('vendido', false).order('created_at', { ascending: false }).limit(1).maybeSingle());
-    return recente ? mapVehicleRow(recente) : null;
-  }
-
   /** Busca um veículo específico pelo id — usado pelo link direto (?veiculo=) quando o veículo compartilhado não está na página atualmente carregada. Só retorna se estiver visível ao público (mesma regra do catálogo). */
   async function getVehicleById(id) {
     const select = '*, marcas(nome), categorias(slug), midias_veiculo(id, url, principal)';
@@ -547,7 +539,8 @@ const HM = (function () {
       parcelamento_ativo: cfg.parcelamentoAtivo,
       parcelamento_juros_mensal: cfg.parcelamentoJuros,
       parcelamento_entrada_padrao: cfg.parcelamentoEntrada,
-      parcelamento_max_parcelas: cfg.parcelamentoMaxParcelas,
+      parcelamento_max_parcelas_carro: cfg.parcelamentoMaxParcelasCarro,
+      parcelamento_max_parcelas_moto: cfg.parcelamentoMaxParcelasMoto,
       updated_at: new Date().toISOString(),
     }).eq('id', 1));
     await logAction('config', 'config', null, { resumo: 'atualizou as configurações da loja' });
@@ -851,7 +844,6 @@ const HM = (function () {
     // veículos
     getVehicles,
     getVehicleStats,
-    getFeaturedVehicle,
     getVehicleById,
     getMarcasDisponiveis,
     getCategorias,

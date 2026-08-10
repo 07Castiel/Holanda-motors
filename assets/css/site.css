@@ -64,7 +64,8 @@ nav[aria-label="Principal"] a:hover, nav[aria-label="Principal"] a:focus-visible
 .hero-actions { display: flex; gap: 16px; flex-wrap: wrap; }
 
 .hero-visual { display: flex; align-items: center; justify-content: center; position: relative; }
-.hero-car-card { background: var(--dark); border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; width: 100%; max-width: 460px; }
+.hero-car-card { background: var(--dark); border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; width: 100%; max-width: 460px; opacity: 1; transition: opacity 0.35s ease; }
+.hero-car-card.hero-fade-out { opacity: 0; }
 .hero-car-img { width: 100%; height: 260px; background: var(--dark2); position: relative; overflow: hidden; }
 .hero-car-img img { width: 100%; height: 100%; object-fit: contain; }
 .hero-car-label { position: absolute; bottom: 16px; left: 16px; background: var(--red); color: var(--white); font-size: 10px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; padding: 4px 10px; border-radius: 2px; }

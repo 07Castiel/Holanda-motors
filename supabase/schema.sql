@@ -817,3 +817,38 @@ $$;
 -- chave estrangeira mas sem índice de cobertura.
 -- ----------------------------------------------------------------------------
 create index if not exists idx_emails_permitidos_criado_por on emails_permitidos (criado_por);
+
+-- ============================================================================
+-- PARTE 8 — Limite de parcelas separado por tipo de veículo (carro/moto)
+-- ----------------------------------------------------------------------------
+-- Motos e carros têm prazos máximos de financiamento diferentes na prática
+-- (ex: motos até 48x, carros até 60x). A Parte 4 tinha um único
+-- "parcelamento_max_parcelas" global — aditivo aqui: mantém essa coluna
+-- (não usada mais pelo front-end, mas preservada por segurança) e acrescenta
+-- duas novas, uma por tipo, já migrando o valor global como ponto de partida.
+-- ============================================================================
+
+alter table configuracoes_loja
+  add column if not exists parcelamento_max_parcelas_carro integer not null default 60,
+  add column if not exists parcelamento_max_parcelas_moto integer not null default 48;
+
+update configuracoes_loja
+  set parcelamento_max_parcelas_carro = coalesce(parcelamento_max_parcelas, 60),
+      parcelamento_max_parcelas_moto = least(coalesce(parcelamento_max_parcelas, 48), 48)
+  where id = 1;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'configuracoes_loja_parc_max_carro_check'
+  ) then
+    alter table configuracoes_loja
+      add constraint configuracoes_loja_parc_max_carro_check check (parcelamento_max_parcelas_carro between 1 and 120);
+  end if;
+  if not exists (
+    select 1 from pg_constraint where conname = 'configuracoes_loja_parc_max_moto_check'
+  ) then
+    alter table configuracoes_loja
+      add constraint configuracoes_loja_parc_max_moto_check check (parcelamento_max_parcelas_moto between 1 and 120);
+  end if;
+end $$;

@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../assets/css/base.css?v=3">
-<link rel="stylesheet" href="../assets/css/admin.css?v=3">
+<link rel="stylesheet" href="../assets/css/base.css?v=4">
+<link rel="stylesheet" href="../assets/css/admin.css?v=4">
 </head>
 <body>
 
@@ -340,7 +340,10 @@
               </div>
               <div class="config-field"><label for="cfg-parcelamento-juros">Juros ao mês (%)</label><input type="number" id="cfg-parcelamento-juros" min="0" step="0.01" placeholder="1.99"></div>
               <div class="config-field"><label for="cfg-parcelamento-entrada">Entrada padrão (% do preço)</label><input type="number" id="cfg-parcelamento-entrada" min="0" max="100" step="1" placeholder="20"></div>
-              <div class="config-field"><label for="cfg-parcelamento-max">Máximo de parcelas</label><input type="number" id="cfg-parcelamento-max" min="1" max="120" step="1" placeholder="48"></div>
+              <div class="form-row">
+                <div class="config-field"><label for="cfg-parcelamento-max-carro">Máximo de parcelas (carros)</label><input type="number" id="cfg-parcelamento-max-carro" min="1" max="120" step="1" placeholder="60"></div>
+                <div class="config-field"><label for="cfg-parcelamento-max-moto">Máximo de parcelas (motos)</label><input type="number" id="cfg-parcelamento-max-moto" min="1" max="120" step="1" placeholder="48"></div>
+              </div>
               <p class="page-hint">Só uma simulação aproximada, sem consulta de crédito — o cálculo é feito no navegador do visitante e não representa uma oferta de financiamento real.</p>
             </div>
             <div class="config-section" style="margin-top:20px">
@@ -511,8 +514,8 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.2"></script>
-<script src="../assets/js/supabase-client.js?v=3"></script>
-<script src="../assets/js/data.js?v=3"></script>
-<script src="../assets/js/admin.js?v=3"></script>
+<script src="../assets/js/supabase-client.js?v=4"></script>
+<script src="../assets/js/data.js?v=4"></script>
+<script src="../assets/js/admin.js?v=4"></script>
 </body>
 </html>

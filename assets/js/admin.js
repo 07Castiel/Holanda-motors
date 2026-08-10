@@ -725,7 +725,8 @@
     document.getElementById('cfg-parcelamento-ativo').checked = !!cfg.parcelamentoAtivo;
     document.getElementById('cfg-parcelamento-juros').value = cfg.parcelamentoJuros;
     document.getElementById('cfg-parcelamento-entrada').value = cfg.parcelamentoEntrada;
-    document.getElementById('cfg-parcelamento-max').value = cfg.parcelamentoMaxParcelas;
+    document.getElementById('cfg-parcelamento-max-carro').value = cfg.parcelamentoMaxParcelasCarro;
+    document.getElementById('cfg-parcelamento-max-moto').value = cfg.parcelamentoMaxParcelasMoto;
   }
   document.getElementById('saveConfigBtn').addEventListener('click', async () => {
     const cfg = {
@@ -743,13 +744,14 @@
       parcelamentoAtivo: document.getElementById('cfg-parcelamento-ativo').checked,
       parcelamentoJuros: Number(document.getElementById('cfg-parcelamento-juros').value) || 0,
       parcelamentoEntrada: Number(document.getElementById('cfg-parcelamento-entrada').value) || 0,
-      parcelamentoMaxParcelas: Math.round(Number(document.getElementById('cfg-parcelamento-max').value)) || 1,
+      parcelamentoMaxParcelasCarro: Math.round(Number(document.getElementById('cfg-parcelamento-max-carro').value)) || 1,
+      parcelamentoMaxParcelasMoto: Math.round(Number(document.getElementById('cfg-parcelamento-max-moto').value)) || 1,
     };
     if (cfg.parcelamentoEntrada < 0 || cfg.parcelamentoEntrada > 100) {
       toast('A entrada padrão do simulador precisa ficar entre 0 e 100%.', 'error');
       return;
     }
-    if (cfg.parcelamentoMaxParcelas < 1 || cfg.parcelamentoMaxParcelas > 120) {
+    if (cfg.parcelamentoMaxParcelasCarro < 1 || cfg.parcelamentoMaxParcelasCarro > 120 || cfg.parcelamentoMaxParcelasMoto < 1 || cfg.parcelamentoMaxParcelasMoto > 120) {
       toast('O máximo de parcelas do simulador precisa ficar entre 1 e 120.', 'error');
       return;
     }
