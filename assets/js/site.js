@@ -14,6 +14,11 @@
   const badgeClass = { destaque: 'badge-destaque', seminovo: 'badge-seminovo', consignado: 'badge-consignado' };
   const badgeLabel = { destaque: 'Destaque', seminovo: 'Seminovo', consignado: 'Consignado' };
 
+  /** No site público, veículo consignado aparece como "Seminovo" — só o painel interno mostra a origem do veículo. */
+  function publicBadge(badge) {
+    return badge === 'consignado' ? 'seminovo' : badge;
+  }
+
   let cfg = null;
   let catalogState = {
     page: 0, pageSize: 9, filter: 'todos',
@@ -192,7 +197,7 @@
       <div class="hero-car-card">
         <div class="hero-car-img">
           ${featured.img ? `<img src="${escapeHtml(featured.img)}" alt="${escapeHtml(featured.make + ' ' + featured.model)}">` : ''}
-          <span class="hero-car-label">${badgeLabel[featured.badge] || 'Destaque'}</span>
+          <span class="hero-car-label">${badgeLabel[publicBadge(featured.badge)] || 'Destaque'}</span>
         </div>
         <div class="hero-car-info">
           <div class="hero-car-name">${escapeHtml(featured.make)} ${escapeHtml(featured.model)}</div>
@@ -228,7 +233,6 @@
     // não importa quem esteja com sessão aberta.
     const opts = { page: pageToLoad, pageSize: catalogState.pageSize, ativo: true, vendido: false, comFoto: !!cfg.nophoto, orderBy: catalogState.orderBy };
     if (catalogState.filter === 'carro' || catalogState.filter === 'moto') opts.tipo = catalogState.filter;
-    if (catalogState.filter === 'consignado') opts.badge = 'consignado';
     if (catalogState.carroceriaId) opts.carroceriaId = catalogState.carroceriaId;
     if (catalogState.marcaId) opts.marcaId = catalogState.marcaId;
     if (catalogState.modelo) opts.search = catalogState.modelo;
@@ -268,11 +272,12 @@
 
   function renderCard(v) {
     const wppMsg = `Olá! Vi o ${v.make} ${v.model} no site da Holanda Motors e gostaria de saber mais! ${previewUrlFor(v.id)}`;
+    const badge = publicBadge(v.badge);
     return `
-    <article class="vehicle-card" data-tipo="${v.tipo}" data-badge="${v.badge}">
+    <article class="vehicle-card" data-tipo="${v.tipo}" data-badge="${badge}">
       <div class="vehicle-img ${v.img ? '' : 'no-image'}">
         ${v.img ? `<img src="${escapeHtml(v.img)}" alt="${escapeHtml(v.make + ' ' + v.model)}" loading="lazy">` : ''}
-        <span class="vehicle-badge badge ${badgeClass[v.badge]}">${badgeLabel[v.badge] || v.badge}</span>
+        <span class="vehicle-badge badge ${badgeClass[badge]}">${badgeLabel[badge] || badge}</span>
       </div>
       <div class="vehicle-info">
         <p class="vehicle-make">${escapeHtml(v.make)}</p>
