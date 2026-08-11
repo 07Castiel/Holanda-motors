@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../assets/css/base.css?v=4">
-<link rel="stylesheet" href="../assets/css/admin.css?v=4">
+<link rel="stylesheet" href="../assets/css/base.css?v=5">
+<link rel="stylesheet" href="../assets/css/admin.css?v=5">
 </head>
 <body>
 
@@ -147,6 +147,10 @@
             <option value="carro">Carros</option>
             <option value="moto">Motos</option>
           </select>
+          <label class="sr-only" for="filterCarroceria">Filtrar por categoria</label>
+          <select class="filter-select" id="filterCarroceria">
+            <option value="">Todas as categorias</option>
+          </select>
           <label class="sr-only" for="filterBadge">Filtrar por status</label>
           <select class="filter-select" id="filterBadge">
             <option value="">Todos os status</option>
@@ -154,6 +158,68 @@
             <option value="consignado">Consignado</option>
             <option value="destaque">Destaque</option>
           </select>
+          <label class="sr-only" for="filterSituacao">Filtrar por situação</label>
+          <select class="filter-select" id="filterSituacao">
+            <option value="">Todas as situações</option>
+            <option value="disponivel">Disponível</option>
+            <option value="reservado">Reservado</option>
+            <option value="vendido">Vendido</option>
+            <option value="indisponivel">Indisponível</option>
+          </select>
+        </div>
+        <div class="search-bar">
+          <label class="sr-only" for="filterCambio">Filtrar por câmbio</label>
+          <select class="filter-select" id="filterCambio">
+            <option value="">Todos os câmbios</option>
+            <option value="Automático">Automático</option>
+            <option value="Manual">Manual</option>
+            <option value="CVT">CVT</option>
+          </select>
+          <label class="sr-only" for="filterCombustivel">Filtrar por combustível</label>
+          <select class="filter-select" id="filterCombustivel">
+            <option value="">Todos os combustíveis</option>
+            <option value="Flex">Flex</option>
+            <option value="Gasolina">Gasolina</option>
+            <option value="Elétrico">Elétrico</option>
+            <option value="Híbrido">Híbrido</option>
+            <option value="Diesel">Diesel</option>
+          </select>
+          <label class="sr-only" for="filterCor">Filtrar por cor</label>
+          <select class="filter-select" id="filterCor">
+            <option value="">Todas as cores</option>
+          </select>
+          <label class="sr-only" for="filterAnoMin">Ano mínimo</label>
+          <input class="search-input filter-num" type="number" id="filterAnoMin" placeholder="Ano mín." inputmode="numeric">
+          <label class="sr-only" for="filterAnoMax">Ano máximo</label>
+          <input class="search-input filter-num" type="number" id="filterAnoMax" placeholder="Ano máx." inputmode="numeric">
+          <label class="sr-only" for="filterPrecoMin">Preço mínimo</label>
+          <input class="search-input filter-num" type="number" id="filterPrecoMin" placeholder="Preço mín." min="0" step="1000" inputmode="numeric">
+          <label class="sr-only" for="filterPrecoMax">Preço máximo</label>
+          <input class="search-input filter-num" type="number" id="filterPrecoMax" placeholder="Preço máx." min="0" step="1000" inputmode="numeric">
+          <label class="sr-only" for="filterKmMax">Quilometragem máxima</label>
+          <input class="search-input filter-num" type="number" id="filterKmMax" placeholder="KM máx." min="0" step="1000" inputmode="numeric">
+        </div>
+        <div class="search-bar">
+          <label class="filter-date-label" for="filterDataCadastroDe">Cadastro de</label>
+          <input class="search-input filter-date" type="date" id="filterDataCadastroDe">
+          <label class="filter-date-label" for="filterDataCadastroAte">até</label>
+          <input class="search-input filter-date" type="date" id="filterDataCadastroAte">
+          <label class="filter-date-label" for="filterDataAtualizacaoDe">Atualização de</label>
+          <input class="search-input filter-date" type="date" id="filterDataAtualizacaoDe">
+          <label class="filter-date-label" for="filterDataAtualizacaoAte">até</label>
+          <input class="search-input filter-date" type="date" id="filterDataAtualizacaoAte">
+          <label class="sr-only" for="filterEstoqueParado">Estoque parado</label>
+          <select class="filter-select" id="filterEstoqueParado">
+            <option value="">Estoque parado (qualquer)</option>
+            <option value="30">Parado há +30 dias</option>
+            <option value="60">Parado há +60 dias</option>
+            <option value="90">Parado há +90 dias</option>
+          </select>
+          <label class="filter-checkbox">
+            <input type="checkbox" id="filterIncompletos">
+            Dados incompletos
+          </label>
+          <button type="button" class="filters-adv-clear" id="filterClearBtn" hidden>Limpar filtros</button>
         </div>
         <div class="table-wrap">
           <table>
@@ -416,10 +482,13 @@
         <div class="field"><label for="vKm">KM *</label><input id="vKm" type="number" placeholder="18400" min="0" required></div>
         <div class="field"><label for="vColor">Cor</label><input id="vColor" placeholder="Ex: Branco Pérola"></div>
       </div>
-      <div class="form-row three">
+      <div class="form-row four">
         <div class="field"><label for="vPrice">Preço *</label><input id="vPrice" placeholder="R$ 119.900" required></div>
         <div class="field"><label for="vTipo">Tipo *</label>
           <select id="vTipo"><option value="carro">Carro</option><option value="moto">Moto</option></select>
+        </div>
+        <div class="field"><label for="vCarroceria">Categoria</label>
+          <select id="vCarroceria"></select>
         </div>
         <div class="field"><label for="vPlaca">Placa</label><input id="vPlaca" placeholder="ABC-1234" style="text-transform:uppercase"></div>
       </div>
@@ -515,7 +584,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.2"></script>
 <script src="../assets/js/supabase-client.js?v=4"></script>
-<script src="../assets/js/data.js?v=4"></script>
-<script src="../assets/js/admin.js?v=4"></script>
+<script src="../assets/js/data.js?v=5"></script>
+<script src="../assets/js/admin.js?v=5"></script>
 </body>
 </html>

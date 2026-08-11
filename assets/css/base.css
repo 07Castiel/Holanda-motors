@@ -129,6 +129,7 @@ textarea:focus-visible,
 .badge-ativo { background: rgba(34,197,94,0.15); color: var(--green); }
 .badge-inativo { background: rgba(239,68,68,0.15); color: #f87171; }
 .badge-negociando { background: rgba(245,158,11,0.15); color: var(--yellow); }
+.badge-reservado { background: rgba(245,158,11,0.15); color: var(--yellow); }
 
 /* ── WhatsApp: mesmo ícone reaproveitado via classe, sem duplicar markup ── */
 .icon-wpp { flex-shrink: 0; }

@@ -852,3 +852,61 @@ begin
       add constraint configuracoes_loja_parc_max_moto_check check (parcelamento_max_parcelas_moto between 1 and 120);
   end if;
 end $$;
+
+-- ============================================================================
+-- PARTE 9 — Filtros de veículos: categoria estruturada (carroceria) e status
+-- "Reservado" no painel. Idempotente como o resto do schema.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- CARROCERIAS (categoria estruturada do site público: SUV, Hatch, Sedã...)
+-- ----------------------------------------------------------------------------
+create table if not exists carrocerias (
+  id uuid primary key default gen_random_uuid(),
+  slug text unique not null,
+  nome text not null,
+  created_at timestamptz not null default now()
+);
+
+alter table carrocerias enable row level security;
+
+drop policy if exists "carrocerias_select_public" on carrocerias;
+create policy "carrocerias_select_public" on carrocerias for select using (true);
+drop policy if exists "carrocerias_insert_auth" on carrocerias;
+create policy "carrocerias_insert_auth" on carrocerias for insert with check ((select auth.role()) = 'authenticated');
+drop policy if exists "carrocerias_update_auth" on carrocerias;
+create policy "carrocerias_update_auth" on carrocerias for update using ((select auth.role()) = 'authenticated') with check ((select auth.role()) = 'authenticated');
+drop policy if exists "carrocerias_delete_auth" on carrocerias;
+create policy "carrocerias_delete_auth" on carrocerias for delete using ((select auth.role()) = 'authenticated');
+
+insert into carrocerias (slug, nome) values
+  ('suv', 'SUV'),
+  ('hatch', 'Hatch'),
+  ('sedan', 'Sedã'),
+  ('picape', 'Picape'),
+  ('coupe', 'Coupé'),
+  ('conversivel', 'Conversível'),
+  ('van', 'Minivan/Van'),
+  ('outros', 'Outros')
+on conflict (slug) do nothing;
+
+-- ----------------------------------------------------------------------------
+-- VEICULOS: carroceria_id (nullable — não quebra nada existente) e reservado
+-- (status intermediário do painel, independente de ativo/vendido: marcar um
+-- veículo como reservado NÃO altera sua visibilidade no site automaticamente,
+-- quem decide isso continua sendo o toggle "ativo" já existente).
+-- ----------------------------------------------------------------------------
+alter table veiculos add column if not exists carroceria_id uuid references carrocerias (id);
+alter table veiculos add column if not exists reservado boolean not null default false;
+
+-- Decisão do gestor: classifica automaticamente todo o estoque já cadastrado
+-- como "Outros" para o filtro de categoria funcionar de imediato — só afeta
+-- quem ainda não tem carroceria definida, então reexecutar não sobrescreve
+-- classificações já feitas manualmente depois desta migração.
+update veiculos set carroceria_id = (select id from carrocerias where slug = 'outros')
+where carroceria_id is null;
+
+create index if not exists idx_veiculos_carroceria on veiculos (carroceria_id);
+create index if not exists idx_veiculos_ano on veiculos (ano);
+create index if not exists idx_veiculos_km on veiculos (km);
+create index if not exists idx_veiculos_reservado on veiculos (reservado);

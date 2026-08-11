@@ -22,8 +22,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/css/base.css?v=4">
-<link rel="stylesheet" href="assets/css/site.css?v=4">
+<link rel="stylesheet" href="assets/css/base.css?v=5">
+<link rel="stylesheet" href="assets/css/site.css?v=5">
 </head>
 <body>
 
@@ -102,23 +102,77 @@
         <button class="filter-btn" data-filter="carro" aria-pressed="false">Carros</button>
         <button class="filter-btn" data-filter="moto" aria-pressed="false">Motos</button>
         <button class="filter-btn" data-filter="consignado" aria-pressed="false">Consignados</button>
+        <button type="button" class="filters-open-btn" id="filtersOpenBtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="filtersPanel">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          Filtrar
+        </button>
       </div>
 
-      <div class="filters-adv" role="group" aria-label="Filtrar por marca, preço e ordenação">
-        <label class="sr-only" for="filterMarca">Marca</label>
-        <select class="filters-adv-field" id="filterMarca">
-          <option value="">Todas as marcas</option>
-        </select>
-        <label class="sr-only" for="filterPrecoMin">Preço mínimo</label>
-        <input class="filters-adv-field" type="number" id="filterPrecoMin" placeholder="Preço mín." min="0" step="1000" inputmode="numeric">
-        <label class="sr-only" for="filterPrecoMax">Preço máximo</label>
-        <input class="filters-adv-field" type="number" id="filterPrecoMax" placeholder="Preço máx." min="0" step="1000" inputmode="numeric">
-        <label class="sr-only" for="filterOrdenar">Ordenar por</label>
-        <select class="filters-adv-field" id="filterOrdenar">
-          <option value="recentes">Mais recentes</option>
-          <option value="menor-preco">Menor preço</option>
-          <option value="maior-preco">Maior preço</option>
-        </select>
+      <div class="filters-backdrop" id="filtersBackdrop"></div>
+      <div class="filters-adv" id="filtersPanel" role="group" aria-label="Filtros avançados">
+        <div class="filters-panel-header">
+          <span class="filters-panel-title">Filtros</span>
+          <button type="button" class="filters-panel-close" id="filtersCloseBtn" aria-label="Fechar filtros">✕</button>
+        </div>
+        <div class="filters-panel-fields">
+          <label class="sr-only" for="filterCarroceria">Categoria</label>
+          <select class="filters-adv-field" id="filterCarroceria">
+            <option value="">Todas as categorias</option>
+          </select>
+          <label class="sr-only" for="filterMarca">Marca</label>
+          <select class="filters-adv-field" id="filterMarca">
+            <option value="">Todas as marcas</option>
+          </select>
+          <label class="sr-only" for="filterModelo">Modelo</label>
+          <input class="filters-adv-field" type="text" id="filterModelo" placeholder="Modelo...">
+          <div class="filters-range">
+            <label class="sr-only" for="filterAnoMin">Ano mínimo</label>
+            <input class="filters-adv-field" type="number" id="filterAnoMin" placeholder="Ano mín." inputmode="numeric">
+            <label class="sr-only" for="filterAnoMax">Ano máximo</label>
+            <input class="filters-adv-field" type="number" id="filterAnoMax" placeholder="Ano máx." inputmode="numeric">
+          </div>
+          <div class="filters-range">
+            <label class="sr-only" for="filterPrecoMin">Preço mínimo</label>
+            <input class="filters-adv-field" type="number" id="filterPrecoMin" placeholder="Preço mín." min="0" step="1000" inputmode="numeric">
+            <label class="sr-only" for="filterPrecoMax">Preço máximo</label>
+            <input class="filters-adv-field" type="number" id="filterPrecoMax" placeholder="Preço máx." min="0" step="1000" inputmode="numeric">
+          </div>
+          <label class="sr-only" for="filterKmMax">Quilometragem máxima</label>
+          <input class="filters-adv-field" type="number" id="filterKmMax" placeholder="KM máx." min="0" step="1000" inputmode="numeric">
+          <label class="sr-only" for="filterCambio">Câmbio</label>
+          <select class="filters-adv-field" id="filterCambio">
+            <option value="">Todos os câmbios</option>
+            <option value="Automático">Automático</option>
+            <option value="Manual">Manual</option>
+            <option value="CVT">CVT</option>
+          </select>
+          <label class="sr-only" for="filterCombustivel">Combustível</label>
+          <select class="filters-adv-field" id="filterCombustivel">
+            <option value="">Todos os combustíveis</option>
+            <option value="Flex">Flex</option>
+            <option value="Gasolina">Gasolina</option>
+            <option value="Elétrico">Elétrico</option>
+            <option value="Híbrido">Híbrido</option>
+            <option value="Diesel">Diesel</option>
+          </select>
+          <label class="sr-only" for="filterCor">Cor</label>
+          <select class="filters-adv-field" id="filterCor">
+            <option value="">Todas as cores</option>
+          </select>
+          <label class="sr-only" for="filterOrdenar">Ordenar por</label>
+          <select class="filters-adv-field" id="filterOrdenar">
+            <option value="recentes">Mais recentes</option>
+            <option value="menor-preco">Menor preço</option>
+            <option value="maior-preco">Maior preço</option>
+            <option value="menor-km">Menor quilometragem</option>
+            <option value="ano-novo">Ano mais novo</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="filters-summary">
+        <span class="filters-summary-count" id="filtersResultCount"></span>
+        <div class="filters-chips" id="filterChips"></div>
         <button type="button" class="filters-adv-clear" id="filterClearBtn" hidden>Limpar filtros</button>
       </div>
 
@@ -319,7 +373,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.2"></script>
 <script src="assets/js/supabase-client.js?v=4"></script>
-<script src="assets/js/data.js?v=4"></script>
-<script src="assets/js/site.js?v=4"></script>
+<script src="assets/js/data.js?v=5"></script>
+<script src="assets/js/site.js?v=5"></script>
 </body>
 </html>

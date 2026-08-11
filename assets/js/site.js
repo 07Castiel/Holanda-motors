@@ -15,7 +15,15 @@
   const badgeLabel = { destaque: 'Destaque', seminovo: 'Seminovo', consignado: 'Consignado' };
 
   let cfg = null;
-  let catalogState = { page: 0, pageSize: 9, filter: 'todos', marcaId: '', precoMin: null, precoMax: null, orderBy: 'recentes', rows: [], total: 0 };
+  let catalogState = {
+    page: 0, pageSize: 9, filter: 'todos',
+    carroceriaId: '', marcaId: '', modelo: '',
+    anoMin: null, anoMax: null, precoMin: null, precoMax: null, kmMax: null,
+    cambio: '', combustivel: '', cor: '',
+    orderBy: 'recentes', rows: [], total: 0,
+  };
+  let marcasCache = [];
+  let carroceriasCache = [];
   let lastFocusedEl = null;
   let heroVehicles = [];
   let heroIndex = 0;
@@ -221,9 +229,17 @@
     const opts = { page: pageToLoad, pageSize: catalogState.pageSize, ativo: true, vendido: false, comFoto: !!cfg.nophoto, orderBy: catalogState.orderBy };
     if (catalogState.filter === 'carro' || catalogState.filter === 'moto') opts.tipo = catalogState.filter;
     if (catalogState.filter === 'consignado') opts.badge = 'consignado';
+    if (catalogState.carroceriaId) opts.carroceriaId = catalogState.carroceriaId;
     if (catalogState.marcaId) opts.marcaId = catalogState.marcaId;
+    if (catalogState.modelo) opts.search = catalogState.modelo;
+    if (catalogState.anoMin != null) opts.anoMin = catalogState.anoMin;
+    if (catalogState.anoMax != null) opts.anoMax = catalogState.anoMax;
     if (catalogState.precoMin != null) opts.precoMin = catalogState.precoMin;
     if (catalogState.precoMax != null) opts.precoMax = catalogState.precoMax;
+    if (catalogState.kmMax != null) opts.kmMax = catalogState.kmMax;
+    if (catalogState.cambio) opts.cambio = catalogState.cambio;
+    if (catalogState.combustivel) opts.combustivel = catalogState.combustivel;
+    if (catalogState.cor) opts.cor = catalogState.cor;
 
     const loadMoreBtn = document.getElementById('loadMoreBtn');
     loadMoreBtn.disabled = true;
@@ -234,6 +250,7 @@
       catalogState.rows = reset ? rows : catalogState.rows.concat(rows);
       catalogState.total = total;
       renderVehicles();
+      renderFilterChips();
     } catch (err) {
       if (requestToken !== catalogRequestToken) return;
       console.error('[site] Falha ao carregar veículos.', err);
@@ -308,12 +325,12 @@
     loadCatalogPage(true);
   }
 
-  /* ── FILTROS AVANÇADOS (marca, faixa de preço, ordenação) ── */
+  /* ── FILTROS AVANÇADOS (categoria, marca, modelo, ano, preço, km, câmbio, combustível, cor, ordenação) ── */
   async function populateMarcaFilter() {
     try {
-      const marcas = await HM.getMarcasDisponiveis();
+      marcasCache = await HM.getMarcasDisponiveis();
       const select = document.getElementById('filterMarca');
-      marcas.forEach(m => {
+      marcasCache.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m.id;
         opt.textContent = m.nome;
@@ -324,13 +341,125 @@
     }
   }
 
-  function updateFilterClearVisibility() {
-    const ativos = catalogState.marcaId || catalogState.precoMin != null || catalogState.precoMax != null || catalogState.orderBy !== 'recentes';
-    document.getElementById('filterClearBtn').hidden = !ativos;
+  async function populateCarroceriaFilter() {
+    try {
+      carroceriasCache = await HM.getCarrocerias();
+      const select = document.getElementById('filterCarroceria');
+      carroceriasCache.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.nome;
+        select.appendChild(opt);
+      });
+    } catch (err) {
+      console.error('[site] Falha ao carregar categorias para o filtro.', err);
+    }
   }
+
+  async function populateCorFilter() {
+    try {
+      const cores = await HM.getCoresDisponiveis();
+      const select = document.getElementById('filterCor');
+      cores.forEach(cor => {
+        const opt = document.createElement('option');
+        opt.value = cor;
+        opt.textContent = cor;
+        select.appendChild(opt);
+      });
+    } catch (err) {
+      console.error('[site] Falha ao carregar cores para o filtro.', err);
+    }
+  }
+
+  function filtrosAtivos() {
+    return !!(catalogState.carroceriaId || catalogState.marcaId || catalogState.modelo ||
+      catalogState.anoMin != null || catalogState.anoMax != null ||
+      catalogState.precoMin != null || catalogState.precoMax != null ||
+      catalogState.kmMax != null || catalogState.cambio || catalogState.combustivel || catalogState.cor ||
+      catalogState.orderBy !== 'recentes');
+  }
+
+  function updateFilterClearVisibility() {
+    document.getElementById('filterClearBtn').hidden = !filtrosAtivos();
+  }
+
+  /** Contador de resultados + chips de filtro ativo (removíveis individualmente) — chamada sempre que o catálogo é recarregado. */
+  function renderFilterChips() {
+    const countEl = document.getElementById('filtersResultCount');
+    countEl.textContent = catalogState.total === 1 ? '1 veículo encontrado' : `${catalogState.total} veículos encontrados`;
+
+    const chips = [];
+    if (catalogState.carroceriaId) {
+      const c = carroceriasCache.find(x => x.id === catalogState.carroceriaId);
+      chips.push({ label: `Categoria: ${c ? c.nome : ''}`, clear: () => { catalogState.carroceriaId = ''; document.getElementById('filterCarroceria').value = ''; } });
+    }
+    if (catalogState.marcaId) {
+      const m = marcasCache.find(x => x.id === catalogState.marcaId);
+      chips.push({ label: `Marca: ${m ? m.nome : ''}`, clear: () => { catalogState.marcaId = ''; document.getElementById('filterMarca').value = ''; } });
+    }
+    if (catalogState.modelo) {
+      chips.push({ label: `Modelo: ${catalogState.modelo}`, clear: () => { catalogState.modelo = ''; document.getElementById('filterModelo').value = ''; } });
+    }
+    if (catalogState.anoMin != null || catalogState.anoMax != null) {
+      const txt = catalogState.anoMin != null && catalogState.anoMax != null ? `${catalogState.anoMin}–${catalogState.anoMax}`
+        : catalogState.anoMin != null ? `a partir de ${catalogState.anoMin}` : `até ${catalogState.anoMax}`;
+      chips.push({
+        label: `Ano: ${txt}`,
+        clear: () => { catalogState.anoMin = null; catalogState.anoMax = null; document.getElementById('filterAnoMin').value = ''; document.getElementById('filterAnoMax').value = ''; },
+      });
+    }
+    if (catalogState.precoMin != null || catalogState.precoMax != null) {
+      const txt = catalogState.precoMin != null && catalogState.precoMax != null ? `${HM.formatPrice(catalogState.precoMin)} – ${HM.formatPrice(catalogState.precoMax)}`
+        : catalogState.precoMin != null ? `a partir de ${HM.formatPrice(catalogState.precoMin)}` : `até ${HM.formatPrice(catalogState.precoMax)}`;
+      chips.push({
+        label: `Preço: ${txt}`,
+        clear: () => { catalogState.precoMin = null; catalogState.precoMax = null; document.getElementById('filterPrecoMin').value = ''; document.getElementById('filterPrecoMax').value = ''; },
+      });
+    }
+    if (catalogState.kmMax != null) {
+      chips.push({ label: `Até ${HM.formatKm(catalogState.kmMax)}`, clear: () => { catalogState.kmMax = null; document.getElementById('filterKmMax').value = ''; } });
+    }
+    if (catalogState.cambio) chips.push({ label: `Câmbio: ${catalogState.cambio}`, clear: () => { catalogState.cambio = ''; document.getElementById('filterCambio').value = ''; } });
+    if (catalogState.combustivel) chips.push({ label: `Combustível: ${catalogState.combustivel}`, clear: () => { catalogState.combustivel = ''; document.getElementById('filterCombustivel').value = ''; } });
+    if (catalogState.cor) chips.push({ label: `Cor: ${catalogState.cor}`, clear: () => { catalogState.cor = ''; document.getElementById('filterCor').value = ''; } });
+
+    const chipsEl = document.getElementById('filterChips');
+    chipsEl.innerHTML = chips.map((c, i) => `<button type="button" class="filter-chip" data-chip="${i}">${escapeHtml(c.label)} <span aria-hidden="true">✕</span></button>`).join('');
+    chipsEl.querySelectorAll('[data-chip]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        chips[Number(btn.dataset.chip)].clear();
+        updateFilterClearVisibility();
+        loadCatalogPage(true);
+      });
+    });
+  }
+
+  document.getElementById('filterCarroceria').addEventListener('change', e => {
+    catalogState.carroceriaId = e.target.value;
+    updateFilterClearVisibility();
+    loadCatalogPage(true);
+  });
 
   document.getElementById('filterMarca').addEventListener('change', e => {
     catalogState.marcaId = e.target.value;
+    updateFilterClearVisibility();
+    loadCatalogPage(true);
+  });
+
+  document.getElementById('filterCambio').addEventListener('change', e => {
+    catalogState.cambio = e.target.value;
+    updateFilterClearVisibility();
+    loadCatalogPage(true);
+  });
+
+  document.getElementById('filterCombustivel').addEventListener('change', e => {
+    catalogState.combustivel = e.target.value;
+    updateFilterClearVisibility();
+    loadCatalogPage(true);
+  });
+
+  document.getElementById('filterCor').addEventListener('change', e => {
+    catalogState.cor = e.target.value;
     updateFilterClearVisibility();
     loadCatalogPage(true);
   });
@@ -341,35 +470,91 @@
     loadCatalogPage(true);
   });
 
-  let precoDebounceTimer = null;
-  function onPrecoInputChange() {
-    clearTimeout(precoDebounceTimer);
-    precoDebounceTimer = setTimeout(() => {
-      const min = document.getElementById('filterPrecoMin').value;
-      const max = document.getElementById('filterPrecoMax').value;
-      catalogState.precoMin = min !== '' ? Number(min) : null;
-      catalogState.precoMax = max !== '' ? Number(max) : null;
+  // Campos de texto/número usam debounce (mesmo padrão já usado pela faixa de
+  // preço) para não disparar uma consulta a cada tecla digitada.
+  let filterDebounceTimer = null;
+  function numOrNull(v) { return v !== '' ? Number(v) : null; }
+  function onDebouncedFilterChange() {
+    clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = setTimeout(() => {
+      catalogState.modelo = document.getElementById('filterModelo').value.trim();
+      catalogState.anoMin = numOrNull(document.getElementById('filterAnoMin').value);
+      catalogState.anoMax = numOrNull(document.getElementById('filterAnoMax').value);
+      catalogState.precoMin = numOrNull(document.getElementById('filterPrecoMin').value);
+      catalogState.precoMax = numOrNull(document.getElementById('filterPrecoMax').value);
+      catalogState.kmMax = numOrNull(document.getElementById('filterKmMax').value);
       updateFilterClearVisibility();
       loadCatalogPage(true);
     }, 400);
   }
-  document.getElementById('filterPrecoMin').addEventListener('input', onPrecoInputChange);
-  document.getElementById('filterPrecoMax').addEventListener('input', onPrecoInputChange);
+  ['filterModelo', 'filterAnoMin', 'filterAnoMax', 'filterPrecoMin', 'filterPrecoMax', 'filterKmMax'].forEach(id => {
+    document.getElementById(id).addEventListener('input', onDebouncedFilterChange);
+  });
 
   document.getElementById('filterClearBtn').addEventListener('click', () => {
+    catalogState.carroceriaId = '';
     catalogState.marcaId = '';
+    catalogState.modelo = '';
+    catalogState.anoMin = null;
+    catalogState.anoMax = null;
     catalogState.precoMin = null;
     catalogState.precoMax = null;
+    catalogState.kmMax = null;
+    catalogState.cambio = '';
+    catalogState.combustivel = '';
+    catalogState.cor = '';
     catalogState.orderBy = 'recentes';
+    document.getElementById('filterCarroceria').value = '';
     document.getElementById('filterMarca').value = '';
+    document.getElementById('filterModelo').value = '';
+    document.getElementById('filterAnoMin').value = '';
+    document.getElementById('filterAnoMax').value = '';
     document.getElementById('filterPrecoMin').value = '';
     document.getElementById('filterPrecoMax').value = '';
+    document.getElementById('filterKmMax').value = '';
+    document.getElementById('filterCambio').value = '';
+    document.getElementById('filterCombustivel').value = '';
+    document.getElementById('filterCor').value = '';
     document.getElementById('filterOrdenar').value = 'recentes';
     updateFilterClearVisibility();
     loadCatalogPage(true);
   });
 
   document.getElementById('loadMoreBtn').addEventListener('click', () => loadCatalogPage(false));
+
+  /* ── GAVETA DE FILTROS NO MOBILE (botão "Filtrar" — acessível: foco preso, ESC fecha, foco retorna ao gatilho) ── */
+  let filtersLastFocusedEl = null;
+  function openFiltersDrawer() {
+    filtersLastFocusedEl = document.activeElement;
+    document.getElementById('filtersPanel').classList.add('open');
+    document.getElementById('filtersBackdrop').classList.add('open');
+    document.getElementById('filtersOpenBtn').setAttribute('aria-expanded', 'true');
+    document.body.style.overflow = 'hidden';
+    document.getElementById('filtersCloseBtn').focus();
+    document.addEventListener('keydown', onFiltersDrawerKeydown);
+  }
+  function closeFiltersDrawer() {
+    document.getElementById('filtersPanel').classList.remove('open');
+    document.getElementById('filtersBackdrop').classList.remove('open');
+    document.getElementById('filtersOpenBtn').setAttribute('aria-expanded', 'false');
+    document.body.style.overflow = '';
+    document.removeEventListener('keydown', onFiltersDrawerKeydown);
+    if (filtersLastFocusedEl) filtersLastFocusedEl.focus();
+  }
+  function onFiltersDrawerKeydown(e) {
+    if (e.key === 'Escape') { closeFiltersDrawer(); return; }
+    if (e.key !== 'Tab') return;
+    const panel = document.getElementById('filtersPanel');
+    const focusables = panel.querySelectorAll('button:not([disabled]), input, select');
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+  document.getElementById('filtersOpenBtn').addEventListener('click', openFiltersDrawer);
+  document.getElementById('filtersCloseBtn').addEventListener('click', closeFiltersDrawer);
+  document.getElementById('filtersBackdrop').addEventListener('click', closeFiltersDrawer);
 
   /* ── MODAL DE DETALHES (acessível: foco preso, ESC fecha, foco retorna ao gatilho) ── */
   let modalVehicle = null;
@@ -599,6 +784,8 @@
     applyConfig();
     renderHero();
     populateMarcaFilter();
+    populateCarroceriaFilter();
+    populateCorFilter();
     await loadCatalogPage(true);
     await openDeepLinkedVehicle();
   })();

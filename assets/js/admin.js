@@ -23,6 +23,7 @@
   const ICON_EDIT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
   const ICON_DEL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6m4-6v6"/><path d="M9 6V4h6v2"/></svg>';
   const ICON_TAG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20.59 13.41L11 3.83A2 2 0 009.59 3.24L4 3a1 1 0 00-1 1l.24 5.59a2 2 0 00.59 1.41l9.58 9.58a2 2 0 002.83 0l4.35-4.35a2 2 0 000-2.82z"/><circle cx="8" cy="8" r="1.5"/></svg>';
+  const ICON_BOOKMARK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>';
   const ICON_EYE_SMALL = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="vertical-align:-2px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
   const ICON_WPP_SMALL = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>';
 
@@ -87,6 +88,7 @@
     applyRolePermissions();
     resetVehicleState();
     resetConsigState();
+    populateVehicleFilterOptions();
     await Promise.all([renderDashboard(), loadVehiclePage(true), loadConsigPage(true), loadConfigForm()]);
     checkMobile();
   }
@@ -231,8 +233,57 @@
   }
 
   /* ── TABELA DE VEÍCULOS (paginada + busca instantânea) ── */
-  let vehicleState = { page: 0, pageSize: 20, search: '', tipo: '', badge: '', rows: [], total: 0, interesse: {} };
-  function resetVehicleState() { vehicleState = { page: 0, pageSize: 20, search: '', tipo: '', badge: '', rows: [], total: 0, interesse: {} }; }
+  const VEHICLE_STATE_DEFAULTS = {
+    page: 0, pageSize: 20, search: '', tipo: '', carroceriaId: '', badge: '', situacao: '',
+    cambio: '', combustivel: '', cor: '',
+    anoMin: null, anoMax: null, precoMin: null, precoMax: null, kmMax: null,
+    dataCadastroDe: '', dataCadastroAte: '', dataAtualizacaoDe: '', dataAtualizacaoAte: '',
+    estoqueParadoDias: null, incompletos: false,
+    rows: [], total: 0, interesse: {},
+  };
+  let vehicleState = { ...VEHICLE_STATE_DEFAULTS };
+  function resetVehicleState() { vehicleState = { ...VEHICLE_STATE_DEFAULTS }; }
+
+  // Cache das 8 carrocerias fixas — usado tanto pelo select de filtro quanto
+  // pelo select do formulário de cadastro/edição, evitando duas consultas iguais.
+  let carroceriasCache = [];
+
+  /** Popula os selects de categoria (filtro + formulário) e cor do filtro — chamada em toda entrada no painel (login/relogin), então limpa opções antigas antes para não duplicar em caso de logout seguido de novo login na mesma aba. */
+  async function populateVehicleFilterOptions() {
+    try {
+      const [carrocerias, cores] = await Promise.all([HM.getCarrocerias(), HM.getCoresDisponiveis(false)]);
+      carroceriasCache = carrocerias;
+
+      const carroceriaSelect = document.getElementById('filterCarroceria');
+      carroceriaSelect.length = 1;
+      carrocerias.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.nome;
+        carroceriaSelect.appendChild(opt);
+      });
+
+      const corSelect = document.getElementById('filterCor');
+      corSelect.length = 1;
+      cores.forEach(cor => {
+        const opt = document.createElement('option');
+        opt.value = cor;
+        opt.textContent = cor;
+        corSelect.appendChild(opt);
+      });
+
+      const vCarroceriaSelect = document.getElementById('vCarroceria');
+      vCarroceriaSelect.innerHTML = '';
+      carrocerias.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.slug;
+        opt.textContent = c.nome;
+        vCarroceriaSelect.appendChild(opt);
+      });
+    } catch (err) {
+      console.error('[admin] Falha ao carregar opções de filtro (categoria/cor).', err);
+    }
+  }
 
   let searchDebounceTimer = null;
   document.getElementById('searchVehicle').addEventListener('input', e => {
@@ -241,8 +292,86 @@
     searchDebounceTimer = setTimeout(() => { vehicleState.search = valor; loadVehiclePage(true); }, 250);
   });
   document.getElementById('filterTipo').addEventListener('change', e => { vehicleState.tipo = e.target.value; loadVehiclePage(true); });
+  document.getElementById('filterCarroceria').addEventListener('change', e => { vehicleState.carroceriaId = e.target.value; loadVehiclePage(true); });
   document.getElementById('filterBadge').addEventListener('change', e => { vehicleState.badge = e.target.value; loadVehiclePage(true); });
+  document.getElementById('filterSituacao').addEventListener('change', e => { vehicleState.situacao = e.target.value; loadVehiclePage(true); });
+  document.getElementById('filterCambio').addEventListener('change', e => { vehicleState.cambio = e.target.value; loadVehiclePage(true); });
+  document.getElementById('filterCombustivel').addEventListener('change', e => { vehicleState.combustivel = e.target.value; loadVehiclePage(true); });
+  document.getElementById('filterCor').addEventListener('change', e => { vehicleState.cor = e.target.value; loadVehiclePage(true); });
+  document.getElementById('filterEstoqueParado').addEventListener('change', e => {
+    vehicleState.estoqueParadoDias = e.target.value !== '' ? Number(e.target.value) : null;
+    loadVehiclePage(true);
+  });
+  document.getElementById('filterIncompletos').addEventListener('change', e => { vehicleState.incompletos = e.target.checked; loadVehiclePage(true); });
   document.getElementById('vehicleLoadMoreBtn').addEventListener('click', () => loadVehiclePage(false));
+
+  // Campos numéricos/de data usam debounce (texto) ou disparam direto
+  // (date), mesmo padrão do site público.
+  let vehicleFilterDebounceTimer = null;
+  function numOrNull(v) { return v !== '' ? Number(v) : null; }
+  function onVehicleFilterRangeChange() {
+    clearTimeout(vehicleFilterDebounceTimer);
+    vehicleFilterDebounceTimer = setTimeout(() => {
+      vehicleState.anoMin = numOrNull(document.getElementById('filterAnoMin').value);
+      vehicleState.anoMax = numOrNull(document.getElementById('filterAnoMax').value);
+      vehicleState.precoMin = numOrNull(document.getElementById('filterPrecoMin').value);
+      vehicleState.precoMax = numOrNull(document.getElementById('filterPrecoMax').value);
+      vehicleState.kmMax = numOrNull(document.getElementById('filterKmMax').value);
+      loadVehiclePage(true);
+    }, 400);
+  }
+  ['filterAnoMin', 'filterAnoMax', 'filterPrecoMin', 'filterPrecoMax', 'filterKmMax'].forEach(id => {
+    document.getElementById(id).addEventListener('input', onVehicleFilterRangeChange);
+  });
+  const DATE_FIELD_IDS = {
+    filterDataCadastroDe: 'dataCadastroDe',
+    filterDataCadastroAte: 'dataCadastroAte',
+    filterDataAtualizacaoDe: 'dataAtualizacaoDe',
+    filterDataAtualizacaoAte: 'dataAtualizacaoAte',
+  };
+  Object.keys(DATE_FIELD_IDS).forEach(id => {
+    document.getElementById(id).addEventListener('change', e => {
+      vehicleState[DATE_FIELD_IDS[id]] = e.target.value;
+      loadVehiclePage(true);
+    });
+  });
+
+  function vehicleFiltrosAtivos() {
+    return !!(vehicleState.search || vehicleState.tipo || vehicleState.carroceriaId || vehicleState.badge || vehicleState.situacao ||
+      vehicleState.cambio || vehicleState.combustivel || vehicleState.cor ||
+      vehicleState.anoMin != null || vehicleState.anoMax != null ||
+      vehicleState.precoMin != null || vehicleState.precoMax != null || vehicleState.kmMax != null ||
+      vehicleState.dataCadastroDe || vehicleState.dataCadastroAte || vehicleState.dataAtualizacaoDe || vehicleState.dataAtualizacaoAte ||
+      vehicleState.estoqueParadoDias != null || vehicleState.incompletos);
+  }
+  function updateVehicleFilterClearVisibility() {
+    document.getElementById('filterClearBtn').hidden = !vehicleFiltrosAtivos();
+  }
+
+  document.getElementById('filterClearBtn').addEventListener('click', () => {
+    resetVehicleState();
+    document.getElementById('searchVehicle').value = '';
+    document.getElementById('filterTipo').value = '';
+    document.getElementById('filterCarroceria').value = '';
+    document.getElementById('filterBadge').value = '';
+    document.getElementById('filterSituacao').value = '';
+    document.getElementById('filterCambio').value = '';
+    document.getElementById('filterCombustivel').value = '';
+    document.getElementById('filterCor').value = '';
+    document.getElementById('filterAnoMin').value = '';
+    document.getElementById('filterAnoMax').value = '';
+    document.getElementById('filterPrecoMin').value = '';
+    document.getElementById('filterPrecoMax').value = '';
+    document.getElementById('filterKmMax').value = '';
+    document.getElementById('filterDataCadastroDe').value = '';
+    document.getElementById('filterDataCadastroAte').value = '';
+    document.getElementById('filterDataAtualizacaoDe').value = '';
+    document.getElementById('filterDataAtualizacaoAte').value = '';
+    document.getElementById('filterEstoqueParado').value = '';
+    document.getElementById('filterIncompletos').checked = false;
+    updateVehicleFilterClearVisibility();
+    loadVehiclePage(true);
+  });
 
   // Token de requisição: se o usuário mexer em outro filtro antes desta
   // consulta voltar, a resposta antiga (agora obsoleta) é descartada em vez
@@ -255,8 +384,26 @@
     const pageToLoad = reset ? 0 : vehicleState.page + 1;
     const loadMoreBtn = document.getElementById('vehicleLoadMoreBtn');
     loadMoreBtn.disabled = true;
+    updateVehicleFilterClearVisibility();
     try {
-      const { rows, total } = await HM.getVehicles({ page: pageToLoad, pageSize: vehicleState.pageSize, search: vehicleState.search, tipo: vehicleState.tipo, badge: vehicleState.badge });
+      const opts = {
+        page: pageToLoad, pageSize: vehicleState.pageSize, search: vehicleState.search,
+        tipo: vehicleState.tipo, badge: vehicleState.badge, status: vehicleState.situacao || undefined,
+        cambio: vehicleState.cambio, combustivel: vehicleState.combustivel, cor: vehicleState.cor,
+        incompletos: vehicleState.incompletos,
+      };
+      if (vehicleState.carroceriaId) opts.carroceriaId = vehicleState.carroceriaId;
+      if (vehicleState.anoMin != null) opts.anoMin = vehicleState.anoMin;
+      if (vehicleState.anoMax != null) opts.anoMax = vehicleState.anoMax;
+      if (vehicleState.precoMin != null) opts.precoMin = vehicleState.precoMin;
+      if (vehicleState.precoMax != null) opts.precoMax = vehicleState.precoMax;
+      if (vehicleState.kmMax != null) opts.kmMax = vehicleState.kmMax;
+      if (vehicleState.dataCadastroDe) opts.dataCadastroDe = vehicleState.dataCadastroDe;
+      if (vehicleState.dataCadastroAte) opts.dataCadastroAte = vehicleState.dataCadastroAte;
+      if (vehicleState.dataAtualizacaoDe) opts.dataAtualizacaoDe = vehicleState.dataAtualizacaoDe;
+      if (vehicleState.dataAtualizacaoAte) opts.dataAtualizacaoAte = vehicleState.dataAtualizacaoAte;
+      if (vehicleState.estoqueParadoDias != null) opts.estoqueParadoDias = vehicleState.estoqueParadoDias;
+      const { rows, total } = await HM.getVehicles(opts);
       if (requestToken !== vehicleRequestToken) return;
       vehicleState.page = pageToLoad;
       vehicleState.rows = reset ? rows : vehicleState.rows.concat(rows);
@@ -284,9 +431,15 @@
   function vehicleRowHtml(v, interesse) {
     const subParts = [v.cor || '—', v.combustivel || '—'];
     if (v.placa) subParts.push(`Placa ${v.placa}`);
+    if (v.carroceriaNome) subParts.push(v.carroceriaNome);
+    // Prioridade de exibição: Vendido > Reservado > Visível/Oculto — reservado
+    // não altera "ativo" (ver data.js), então um veículo pode estar reservado
+    // e ainda visível no site; a badge só resume o estado mais relevante pro gestor.
     const visivelBadge = v.vendido
       ? `<span class="badge badge-vendido">Vendido</span>`
-      : `<span class="badge ${v.ativo ? 'badge-ativo' : 'badge-inativo'}">${v.ativo ? 'Visível' : 'Oculto'}</span>`;
+      : v.reservado
+        ? `<span class="badge badge-reservado">Reservado</span>`
+        : `<span class="badge ${v.ativo ? 'badge-ativo' : 'badge-inativo'}">${v.ativo ? 'Visível' : 'Oculto'}</span>`;
     const podeExcluir = roleAtLeast('gerente');
     const info = interesse || { visualizacoes: 0, whatsapp: 0 };
     return `
@@ -302,6 +455,7 @@
         <td>
           <div class="actions">
             <button class="btn-icon toggle" type="button" data-toggle="${v.id}" ${v.vendido ? 'disabled' : ''} aria-label="${v.ativo ? 'Ocultar do site' : 'Exibir no site'}">${v.ativo ? ICON_EYE_OFF : ICON_EYE}</button>
+            <button class="btn-icon reserve ${v.reservado ? 'is-active' : ''}" type="button" data-reserve="${v.id}" data-reservado="${v.reservado ? '1' : '0'}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" ${v.vendido ? 'disabled' : ''} aria-label="${v.reservado ? 'Remover reserva' : 'Marcar como reservado'}">${ICON_BOOKMARK}</button>
             <button class="btn-icon sold" type="button" data-sold="${v.id}" data-vendido="${v.vendido ? '1' : '0'}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="${v.vendido ? 'Reverter para disponível' : 'Marcar como vendido'}">${ICON_TAG}</button>
             <button class="btn-icon edit" type="button" data-edit="${v.id}" aria-label="Editar ${escapeHtml(v.make)} ${escapeHtml(v.model)}">${ICON_EDIT}</button>
             ${podeExcluir ? `<button class="btn-icon del" type="button" data-del="${v.id}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="Excluir ${escapeHtml(v.make)} ${escapeHtml(v.model)}">${ICON_DEL}</button>` : ''}
@@ -318,6 +472,7 @@
     } else {
       tbody.innerHTML = vs.map(v => vehicleRowHtml(v, vehicleState.interesse[v.id])).join('');
       tbody.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', () => toggleVisible(b.dataset.toggle)));
+      tbody.querySelectorAll('[data-reserve]').forEach(b => b.addEventListener('click', () => markReserved(b.dataset.reserve, b.dataset.label, b.dataset.reservado === '1')));
       tbody.querySelectorAll('[data-sold]').forEach(b => b.addEventListener('click', () => markSold(b.dataset.sold, b.dataset.label, b.dataset.vendido === '1')));
       tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openVehicleModal(b.dataset.edit, b)));
       tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => confirmDelete('vehicle', b.dataset.del, b.dataset.label, b)));
@@ -340,6 +495,20 @@
     }
   }
 
+  async function markReserved(id, label, reservadoAtual) {
+    const novo = !reservadoAtual;
+    try {
+      await HM.setVehicleReservado(id, novo, label);
+      const v = vehicleState.rows.find(x => x.id === id);
+      if (v) v.reservado = novo;
+      renderVehicleTable();
+      toast(novo ? 'Veículo marcado como reservado.' : 'Reserva removida.', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao atualizar reserva.', err);
+      toast('Não foi possível atualizar a reserva.', 'error');
+    }
+  }
+
   async function markSold(id, label, vendidoAtual) {
     const novo = !vendidoAtual;
     try {
@@ -357,7 +526,7 @@
 
   /* ── MODAL DE VEÍCULO ── */
   const vehicleOverlay = document.getElementById('vehicleModalOverlay');
-  const vehicleDefaults = { vTipo: 'carro', vBadge: 'seminovo', vCambio: 'Automático', vCombustivel: 'Flex', vAtivo: '1' };
+  const vehicleDefaults = { vTipo: 'carro', vBadge: 'seminovo', vCambio: 'Automático', vCombustivel: 'Flex', vAtivo: '1', vCarroceria: 'outros' };
 
   document.getElementById('newVehicleBtn').addEventListener('click', (e) => openVehicleModal(null, e.currentTarget));
   document.getElementById('vehicleModalCloseBtn').addEventListener('click', closeVehicleModal);
@@ -391,6 +560,7 @@
       document.getElementById('vPlaca').value = v.placa || '';
       document.getElementById('vDesc').value = v.desc || '';
       document.getElementById('vTipo').value = v.tipo;
+      document.getElementById('vCarroceria').value = v.carroceria || 'outros';
       document.getElementById('vBadge').value = v.badge;
       document.getElementById('vCambio').value = v.cambio || 'Automático';
       document.getElementById('vCombustivel').value = v.combustivel || 'Flex';
@@ -437,15 +607,22 @@
     errEl.textContent = '';
 
     const editId = document.getElementById('vId').value;
+    // "vendido"/"reservado" não têm campo neste formulário (são alternados
+    // pelos botões dedicados da tabela) — preserva o valor atual do veículo
+    // em vez de deixar o payload zerá-los implicitamente a cada edição.
+    const existing = editId ? vehicleState.rows.find(x => x.id === editId) : null;
     const data = {
       make, model, year, km: Number(km), price,
       cor: document.getElementById('vColor').value.trim(),
       placa: document.getElementById('vPlaca').value.trim().toUpperCase(),
       tipo: document.getElementById('vTipo').value,
+      carroceria: document.getElementById('vCarroceria').value,
       badge: document.getElementById('vBadge').value,
       cambio: document.getElementById('vCambio').value,
       combustivel: document.getElementById('vCombustivel').value,
       ativo: Number(document.getElementById('vAtivo').value),
+      vendido: existing ? existing.vendido : false,
+      reservado: existing ? existing.reservado : false,
       images: galleryImages,
       desc: document.getElementById('vDesc').value.trim(),
     };

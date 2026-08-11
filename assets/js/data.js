@@ -95,9 +95,13 @@ const HM = (function () {
       badge: row.badge,
       ativo: row.ativo,
       vendido: !!row.vendido,
+      reservado: !!row.reservado,
+      carroceria: row.carrocerias ? row.carrocerias.slug : null,
+      carroceriaNome: row.carrocerias ? row.carrocerias.nome : '',
       img: principal ? principal.url : '',
       imagens: fotos.map(f => ({ id: f.id, url: f.url, principal: f.principal })),
       desc: row.descricao || '',
+      createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
   }
@@ -107,6 +111,7 @@ const HM = (function () {
     return {
       id: row.id,
       tipo: row.categorias ? row.categorias.slug : null,
+      carroceria: row.carrocerias ? row.carrocerias.slug : null,
       make: row.marcas ? row.marcas.nome : '',
       model: row.modelo,
       year: row.ano,
@@ -119,6 +124,7 @@ const HM = (function () {
       badge: row.badge,
       ativo: row.ativo,
       vendido: !!row.vendido,
+      reservado: !!row.reservado,
       desc: row.descricao,
       imagens: fotos.map(f => ({ url: f.url, principal: f.principal })),
     };
@@ -171,7 +177,7 @@ const HM = (function () {
 
   const ACTION_COLORS = {
     criar: 'verde', atualizar: 'azul', excluir: 'vermelho',
-    ativar: 'verde', desativar: 'amarelo', vender: 'verde',
+    ativar: 'verde', desativar: 'amarelo', vender: 'verde', reservar: 'amarelo',
     config: 'azul', senha: 'azul', papel: 'azul', login: 'azul',
   };
 
@@ -223,6 +229,17 @@ const HM = (function () {
     return data.id;
   }
 
+  /** As 8 carrocerias fixas (SUV, Hatch, Sedã...) — usadas tanto no filtro de categoria quanto no formulário de cadastro/edição. */
+  async function getCarrocerias() {
+    return unwrap(await supabaseClient.from('carrocerias').select('id, slug, nome').order('nome'));
+  }
+
+  async function getCarroceriaId(slug) {
+    if (!slug) return null;
+    const data = unwrap(await supabaseClient.from('carrocerias').select('id').eq('slug', slug).maybeSingle());
+    return data ? data.id : null;
+  }
+
   /** Busca a marca pelo nome (sem diferenciar maiúsculas/minúsculas) ou cria uma nova, tolerando corrida entre dois admins criando a mesma marca ao mesmo tempo. */
   async function ensureMarca(nome) {
     const nomeTrim = String(nome || '').trim();
@@ -245,6 +262,15 @@ const HM = (function () {
     const vistas = new Map();
     rows.forEach(r => { if (r.marcas) vistas.set(r.marcas.id, r.marcas.nome); });
     return Array.from(vistas, ([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  }
+
+  /** Cores em uso pelo estoque — para o filtro de cor. O site público só lista cores de veículos ativos/à venda (mesmo critério de getMarcasDisponiveis); o painel vê todas, já que o gestor filtra o estoque inteiro. */
+  async function getCoresDisponiveis(apenasAtivos = true) {
+    let query = supabaseClient.from('veiculos').select('cor').not('cor', 'is', null);
+    if (apenasAtivos) query = query.eq('ativo', true).eq('vendido', false);
+    const rows = unwrap(await query);
+    const vistas = new Set(rows.map(r => r.cor).filter(Boolean));
+    return Array.from(vistas).sort((a, b) => a.localeCompare(b, 'pt-BR'));
   }
 
   /** Só um veículo pode ser "destaque" por vez — desmarca os demais. */
@@ -307,10 +333,11 @@ const HM = (function () {
     }
   }
 
-  function vehiclePayload(input, categoriaId, marcaId) {
+  function vehiclePayload(input, categoriaId, marcaId, carroceriaId) {
     return {
       categoria_id: categoriaId,
       marca_id: marcaId,
+      carroceria_id: carroceriaId,
       modelo: input.model,
       ano: input.year,
       km: input.km,
@@ -322,6 +349,7 @@ const HM = (function () {
       badge: input.badge,
       ativo: !!input.ativo,
       vendido: !!input.vendido,
+      reservado: !!input.reservado,
       descricao: input.desc,
       updated_at: new Date().toISOString(),
     };
@@ -333,7 +361,34 @@ const HM = (function () {
    * desempenho não degrada conforme o estoque cresce, já que só a página
    * atual (e não o catálogo inteiro) trafega a cada consulta.
    */
-  async function getVehicles({ page = 0, pageSize = 20, search = '', tipo = '', badge = '', ativo, vendido, comFoto = false, marcaId = '', precoMin, precoMax, orderBy = 'recentes' } = {}) {
+  const ORDENACOES = {
+    'recentes': { column: 'created_at', ascending: false },
+    'menor-preco': { column: 'preco', ascending: true },
+    'maior-preco': { column: 'preco', ascending: false },
+    'menor-km': { column: 'km', ascending: true },
+    'ano-novo': { column: 'ano', ascending: false },
+  };
+
+  // Status do painel (Disponível/Reservado/Vendido/Indisponível) — traduzido
+  // para a combinação equivalente de ativo/vendido/reservado, os 3 campos que
+  // já existem no banco. Não é uma coluna própria: evita duplicar o estado
+  // que ativo/vendido já representam.
+  const STATUS_FILTROS = {
+    disponivel: { ativo: true, vendido: false, reservado: false },
+    reservado: { vendido: false, reservado: true },
+    vendido: { vendido: true },
+    indisponivel: { ativo: false, vendido: false, reservado: false },
+  };
+
+  async function getVehicles({
+    page = 0, pageSize = 20, search = '', tipo = '', badge = '',
+    ativo, vendido, reservado, status,
+    comFoto = false, incompletos = false,
+    marcaId = '', carroceriaId = '', cambio = '', combustivel = '', cor = '',
+    precoMin, precoMax, anoMin, anoMax, kmMax,
+    dataCadastroDe, dataCadastroAte, dataAtualizacaoDe, dataAtualizacaoAte, estoqueParadoDias,
+    orderBy = 'recentes',
+  } = {}) {
     // "midias_veiculo!inner" (em vez do embed normal) transforma o join em
     // INNER — só entram veículos com pelo menos uma foto — resolvido no
     // servidor, então funciona corretamente junto com a paginação (ao
@@ -341,27 +396,49 @@ const HM = (function () {
     const midiasEmbed = comFoto ? 'midias_veiculo!inner(id, url, principal)' : 'midias_veiculo(id, url, principal)';
     let query = supabaseClient
       .from('veiculos')
-      .select(`*, marcas(nome), categorias(slug), ${midiasEmbed}`, { count: 'exact' });
+      .select(`*, marcas(nome), categorias(slug), carrocerias(slug, nome), ${midiasEmbed}`, { count: 'exact' });
 
-    const ORDENACOES = {
-      'recentes': { column: 'created_at', ascending: false },
-      'menor-preco': { column: 'preco', ascending: true },
-      'maior-preco': { column: 'preco', ascending: false },
-    };
     const ordenacao = ORDENACOES[orderBy] || ORDENACOES.recentes;
     query = query.order(ordenacao.column, { ascending: ordenacao.ascending });
 
-    // ativo/vendido são explícitos aqui (não só confiados ao RLS) porque
-    // esta mesma função é usada tanto pelo painel (autenticado, vê tudo)
-    // quanto pelo site público — sem isso, um gestor logado que abrisse o
-    // site público no mesmo navegador veria também veículos ocultos/vendidos.
-    if (typeof ativo === 'boolean') query = query.eq('ativo', ativo);
-    if (typeof vendido === 'boolean') query = query.eq('vendido', vendido);
+    // "status" (painel) tem prioridade sobre ativo/vendido/reservado
+    // explícitos, mas só substitui o que ele próprio define — ativo/vendido
+    // continuam explícitos aqui (não só confiados ao RLS) porque esta mesma
+    // função é usada tanto pelo painel (autenticado, vê tudo) quanto pelo
+    // site público — sem isso, um gestor logado que abrisse o site público
+    // no mesmo navegador veria também veículos ocultos/vendidos.
+    const statusFiltro = (status && STATUS_FILTROS[status]) || {};
+    const ativoFiltro = 'ativo' in statusFiltro ? statusFiltro.ativo : ativo;
+    const vendidoFiltro = 'vendido' in statusFiltro ? statusFiltro.vendido : vendido;
+    const reservadoFiltro = 'reservado' in statusFiltro ? statusFiltro.reservado : reservado;
+
+    if (typeof ativoFiltro === 'boolean') query = query.eq('ativo', ativoFiltro);
+    if (typeof vendidoFiltro === 'boolean') query = query.eq('vendido', vendidoFiltro);
+    if (typeof reservadoFiltro === 'boolean') query = query.eq('reservado', reservadoFiltro);
     if (tipo) query = query.eq('categoria_id', await getCategoriaId(tipo));
     if (badge) query = query.eq('badge', badge);
     if (marcaId) query = query.eq('marca_id', marcaId);
+    if (carroceriaId) query = query.eq('carroceria_id', carroceriaId);
+    if (cambio) query = query.eq('cambio', cambio);
+    if (combustivel) query = query.eq('combustivel', combustivel);
+    if (cor) query = query.eq('cor', cor);
     if (typeof precoMin === 'number') query = query.gte('preco', precoMin);
     if (typeof precoMax === 'number') query = query.lte('preco', precoMax);
+    if (typeof anoMin === 'number') query = query.gte('ano', anoMin);
+    if (typeof anoMax === 'number') query = query.lte('ano', anoMax);
+    if (typeof kmMax === 'number') query = query.lte('km', kmMax);
+    if (dataCadastroDe) query = query.gte('created_at', `${dataCadastroDe}T00:00:00`);
+    if (dataCadastroAte) query = query.lte('created_at', `${dataCadastroAte}T23:59:59.999`);
+    if (dataAtualizacaoDe) query = query.gte('updated_at', `${dataAtualizacaoDe}T00:00:00`);
+    if (dataAtualizacaoAte) query = query.lte('updated_at', `${dataAtualizacaoAte}T23:59:59.999`);
+
+    // "Estoque parado": cadastrado há pelo menos N dias — só força
+    // vendido=false se o chamador não tiver escolhido outro status
+    // explicitamente (senão "parado + vendido" nunca bateria com nada).
+    if (typeof estoqueParadoDias === 'number') {
+      query = query.lte('created_at', new Date(Date.now() - estoqueParadoDias * 86400000).toISOString());
+      if (typeof vendidoFiltro !== 'boolean') query = query.eq('vendido', false);
+    }
 
     // Remove vírgulas/parênteses: têm significado estrutural no filtro
     // ".or()" do PostgREST e quebrariam a sintaxe se viessem do texto digitado.
@@ -373,6 +450,20 @@ const HM = (function () {
       query = query.or(partes.join(','));
     }
 
+    // "Dados incompletos" (sem foto, sem descrição ou preço zerado) — mesma
+    // técnica de dois passos usada acima na busca textual: o PostgREST não
+    // filtra diretamente por ausência de linhas relacionadas, então resolve
+    // primeiro quem TEM foto e exclui esses ids no OR principal. Um segundo
+    // ".or()" na mesma consulta funciona em AND com o de cima (cada um vira
+    // um parâmetro "or" próprio, o PostgREST combina os parâmetros com AND).
+    if (incompletos) {
+      const comFotoRows = unwrap(await supabaseClient.from('midias_veiculo').select('veiculo_id'));
+      const idsComFoto = Array.from(new Set(comFotoRows.map(r => r.veiculo_id)));
+      const partesIncompletos = ['descricao.is.null', 'descricao.eq.', 'preco.eq.0'];
+      if (idsComFoto.length) partesIncompletos.push(`id.not.in.(${idsComFoto.join(',')})`);
+      query = query.or(partesIncompletos.join(','));
+    }
+
     const from = page * pageSize;
     const { data, error, count } = await query.range(from, from + pageSize - 1);
     if (error) throw error;
@@ -381,7 +472,7 @@ const HM = (function () {
 
   /** Busca um veículo específico pelo id — usado pelo link direto (?veiculo=) quando o veículo compartilhado não está na página atualmente carregada. Só retorna se estiver visível ao público (mesma regra do catálogo). */
   async function getVehicleById(id) {
-    const select = '*, marcas(nome), categorias(slug), midias_veiculo(id, url, principal)';
+    const select = '*, marcas(nome), categorias(slug), carrocerias(slug, nome), midias_veiculo(id, url, principal)';
     const row = unwrap(await supabaseClient.from('veiculos').select(select).eq('id', id).eq('ativo', true).eq('vendido', false).maybeSingle());
     return row ? mapVehicleRow(row) : null;
   }
@@ -410,19 +501,19 @@ const HM = (function () {
   }
 
   async function createVehicle(input) {
-    const [categoriaId, marcaId] = await Promise.all([getCategoriaId(input.tipo), ensureMarca(input.make)]);
+    const [categoriaId, marcaId, carroceriaId] = await Promise.all([getCategoriaId(input.tipo), ensureMarca(input.make), getCarroceriaId(input.carroceria)]);
     if (input.badge === 'destaque') await clearDestaque(null);
-    const created = unwrap(await supabaseClient.from('veiculos').insert(vehiclePayload(input, categoriaId, marcaId)).select('id').single());
+    const created = unwrap(await supabaseClient.from('veiculos').insert(vehiclePayload(input, categoriaId, marcaId, carroceriaId)).select('id').single());
     if (input.images) await saveVehicleImages(created.id, input.images);
     await logAction('criar', 'veiculo', created.id, { resumo: `cadastrou ${input.make} ${input.model}` });
     return created.id;
   }
 
   async function updateVehicle(id, input) {
-    const [categoriaId, marcaId] = await Promise.all([getCategoriaId(input.tipo), ensureMarca(input.make)]);
+    const [categoriaId, marcaId, carroceriaId] = await Promise.all([getCategoriaId(input.tipo), ensureMarca(input.make), getCarroceriaId(input.carroceria)]);
     if (input.badge === 'destaque') await clearDestaque(id);
 
-    let query = supabaseClient.from('veiculos').update(vehiclePayload(input, categoriaId, marcaId)).eq('id', id);
+    let query = supabaseClient.from('veiculos').update(vehiclePayload(input, categoriaId, marcaId, carroceriaId)).eq('id', id);
     if (input.expectedUpdatedAt) query = query.eq('updated_at', input.expectedUpdatedAt);
     const { data, error } = await query.select('id');
     if (error) throw error;
@@ -457,6 +548,14 @@ const HM = (function () {
     unwrap(await supabaseClient.from('veiculos').update(payload).eq('id', id));
     await logAction(vendido ? 'vender' : 'atualizar', 'veiculo', id, {
       resumo: vendido ? `marcou ${label || 'um veículo'} como vendido` : `reverteu ${label || 'um veículo'} para disponível`,
+    });
+  }
+
+  /** Marca/desmarca um veículo como reservado — status intermediário do painel, não altera "ativo" (a visibilidade no site continua sendo decidida pelo toggle existente). */
+  async function setVehicleReservado(id, reservado, label) {
+    unwrap(await supabaseClient.from('veiculos').update({ reservado, updated_at: new Date().toISOString() }).eq('id', id));
+    await logAction(reservado ? 'reservar' : 'atualizar', 'veiculo', id, {
+      resumo: reservado ? `marcou ${label || 'um veículo'} como reservado` : `removeu a reserva de ${label || 'um veículo'}`,
     });
   }
 
@@ -719,10 +818,10 @@ const HM = (function () {
     const existente = unwrap(await supabaseClient.from('veiculos').select('id').eq('legacy_id', legacyId).maybeSingle());
     if (existente) return { skipped: true, id: existente.id };
 
-    const [categoriaId, marcaId] = await Promise.all([getCategoriaId(legacy.tipo), ensureMarca(legacy.make)]);
+    const [categoriaId, marcaId, carroceriaId] = await Promise.all([getCategoriaId(legacy.tipo), ensureMarca(legacy.make), getCarroceriaId('outros')]);
     if (legacy.badge === 'destaque') await clearDestaque(null);
 
-    const payload = vehiclePayload(legacy, categoriaId, marcaId);
+    const payload = vehiclePayload(legacy, categoriaId, marcaId, carroceriaId);
     payload.legacy_id = legacyId;
     const created = unwrap(await supabaseClient.from('veiculos').insert(payload).select('id').single());
 
@@ -778,11 +877,13 @@ const HM = (function () {
   }
 
   async function createVehicleFromBackup(v) {
-    const [categoriaId, marcaId] = await Promise.all([getCategoriaId(v.tipo), ensureMarca(v.make)]);
+    // Backups antigos (anteriores a este recurso) não têm "carroceria" — cai em "outros", igual à migração do estoque já cadastrado.
+    const [categoriaId, marcaId, carroceriaId] = await Promise.all([getCategoriaId(v.tipo), ensureMarca(v.make), getCarroceriaId(v.carroceria || 'outros')]);
     const payload = {
       id: v.id,
       categoria_id: categoriaId,
       marca_id: marcaId,
+      carroceria_id: carroceriaId,
       modelo: v.model,
       ano: v.year,
       km: v.km,
@@ -794,6 +895,7 @@ const HM = (function () {
       badge: 'seminovo', // ajustado abaixo se necessário — evita violar o índice de "destaque único" durante a restauração
       ativo: !!v.ativo,
       vendido: !!v.vendido,
+      reservado: !!v.reservado,
       descricao: v.desc,
     };
     const { data, error } = await supabaseClient.from('veiculos').upsert(payload, { onConflict: 'id' }).select('id').single();
@@ -846,12 +948,15 @@ const HM = (function () {
     getVehicleStats,
     getVehicleById,
     getMarcasDisponiveis,
+    getCoresDisponiveis,
     getCategorias,
+    getCarrocerias,
     createVehicle,
     updateVehicle,
     deleteVehicle,
     toggleVehicleAtivo,
     setVehicleVendido,
+    setVehicleReservado,
     // consignações
     getConsigs,
     getConsigStats,
