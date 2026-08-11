@@ -237,6 +237,17 @@ tbody td { padding: 14px 16px; font-size: 13px; vertical-align: middle; }
 .img-gallery-item .gallery-principal-tag { position: absolute; bottom: 5px; left: 5px; font-size: 8px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; background: var(--red); color: #fff; padding: 2px 6px; border-radius: 10px; }
 .img-gallery-item.uploading { opacity: .5; }
 
+/* ── Arrastar-e-soltar para reordenar as fotos (mouse, caneta e toque via Pointer Events) ── */
+.img-gallery-item { cursor: grab; touch-action: none; }
+.img-gallery-item.dragging { cursor: grabbing; z-index: 2; box-shadow: 0 6px 20px rgba(0,0,0,.5); transition: none; }
+.img-gallery-item.drag-over { outline: 2px dashed var(--red); outline-offset: -2px; }
+.img-gallery-item .gallery-order-tag {
+  position: absolute; top: 5px; left: 5px; z-index: 1;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: rgba(0,0,0,.65); color: #fff; font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+
 /* ── HISTÓRICO / LOGS ── */
 .history-title { font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--gray); margin: 24px 0 10px; padding-top: 16px; border-top: 1px solid var(--border); }
 .log-list { list-style: none; display: flex; flex-direction: column; gap: 8px; max-height: 220px; overflow-y: auto; font-size: 12px; }

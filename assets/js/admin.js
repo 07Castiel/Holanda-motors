@@ -648,7 +648,7 @@
     }
   }
 
-  /* ── GALERIA DE FOTOS (múltiplas, arrastar-e-soltar, compactação automática) ── */
+  /* ── GALERIA DE FOTOS (múltiplas, arrastar-e-soltar para reordenar, compactação automática) ── */
   let galleryImages = []; // { id, file, url, previewUrl, principal, uploading }
   const uploadArea = document.getElementById('uploadArea');
   const imgFileInput = document.getElementById('imgFileInput');
@@ -659,7 +659,8 @@
   function renderGallery() {
     const wrap = document.getElementById('imgGallery');
     wrap.innerHTML = galleryImages.map((img, idx) => `
-      <div class="img-gallery-item ${img.uploading ? 'uploading' : ''}">
+      <div class="img-gallery-item ${img.uploading ? 'uploading' : ''}" data-idx="${idx}">
+        <span class="gallery-order-tag">${idx + 1}</span>
         <img src="${escapeHtml(img.previewUrl || img.url)}" alt="">
         ${img.principal ? '<span class="gallery-principal-tag">Capa</span>' : ''}
         <div class="gallery-actions">
@@ -679,6 +680,71 @@
       if (removida && removida.principal && galleryImages.length) galleryImages[0].principal = true;
       renderGallery();
     }));
+
+    wrap.querySelectorAll('.img-gallery-item').forEach(item => item.addEventListener('pointerdown', onGalleryPointerDown));
+  }
+
+  // Arrastar-e-soltar para reordenar, via Pointer Events (mouse, caneta e
+  // toque no mesmo código — ao contrário da API de Drag and Drop do HTML5,
+  // que não dispara em telas touch). A posição final no array vira a
+  // "ordem" salva no banco (ver saveVehicleImages em data.js).
+  let galleryDrag = null; // { idx, item, pointerId, startX, startY, moved, overIdx }
+
+  function onGalleryPointerDown(e) {
+    if (e.target.closest('.gallery-btn')) return; // não inicia arraste ao tocar nos botões ★/✕
+    if (e.button != null && e.button !== 0) return; // só botão esquerdo do mouse (toque/caneta não têm "button")
+    const item = e.currentTarget;
+    galleryDrag = {
+      idx: Number(item.dataset.idx), item,
+      pointerId: e.pointerId,
+      startX: e.clientX, startY: e.clientY,
+      moved: false, overIdx: Number(item.dataset.idx),
+    };
+    try { item.setPointerCapture(e.pointerId); } catch (err) { /* ponteiro já solto — segue sem captura */ }
+    item.addEventListener('pointermove', onGalleryPointerMove);
+    item.addEventListener('pointerup', onGalleryPointerUp);
+    item.addEventListener('pointercancel', onGalleryPointerUp);
+  }
+
+  function onGalleryPointerMove(e) {
+    if (!galleryDrag || e.pointerId !== galleryDrag.pointerId) return;
+    const dx = e.clientX - galleryDrag.startX;
+    const dy = e.clientY - galleryDrag.startY;
+    // Limiar de alguns pixels antes de "iniciar" visualmente — evita que um
+    // toque levemente trêmulo nos botões (fora deles, mas por perto) vire um arraste.
+    if (!galleryDrag.moved && Math.hypot(dx, dy) < 6) return;
+    galleryDrag.moved = true;
+    galleryDrag.item.classList.add('dragging');
+    galleryDrag.item.style.transform = `translate(${dx}px, ${dy}px) scale(1.05)`;
+
+    galleryDrag.item.style.pointerEvents = 'none'; // deixa o elementFromPoint "enxergar" o card embaixo do dedo/cursor
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    galleryDrag.item.style.pointerEvents = '';
+    const targetItem = under && under.closest('.img-gallery-item');
+    document.querySelectorAll('#imgGallery .img-gallery-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+    if (targetItem && targetItem !== galleryDrag.item) {
+      targetItem.classList.add('drag-over');
+      galleryDrag.overIdx = Number(targetItem.dataset.idx);
+    } else {
+      galleryDrag.overIdx = galleryDrag.idx;
+    }
+  }
+
+  function onGalleryPointerUp(e) {
+    if (!galleryDrag || e.pointerId !== galleryDrag.pointerId) return;
+    const { idx, overIdx, moved, item } = galleryDrag;
+    item.removeEventListener('pointermove', onGalleryPointerMove);
+    item.removeEventListener('pointerup', onGalleryPointerUp);
+    item.removeEventListener('pointercancel', onGalleryPointerUp);
+    item.classList.remove('dragging');
+    item.style.transform = '';
+    document.querySelectorAll('#imgGallery .img-gallery-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+    galleryDrag = null;
+    if (moved && overIdx !== idx) {
+      const [movida] = galleryImages.splice(idx, 1);
+      galleryImages.splice(overIdx, 0, movida);
+      renderGallery();
+    }
   }
 
   async function addFilesToGallery(fileList) {

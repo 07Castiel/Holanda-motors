@@ -77,7 +77,10 @@ const HM = (function () {
   // ── Mapeamento linha do banco → formato usado pelas telas ──
 
   function mapVehicleRow(row) {
-    const fotos = (row.midias_veiculo || []).slice().sort((a, b) => (b.principal ? 1 : 0) - (a.principal ? 1 : 0));
+    // A ordem de exibição (galeria/carrossel) segue "ordem" — controlada pelo
+    // gestor arrastando as fotos no painel. A capa (principal) é escolhida à
+    // parte, independente da posição: pode estar em qualquer lugar da ordem.
+    const fotos = (row.midias_veiculo || []).slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
     const principal = fotos.find(f => f.principal) || fotos[0];
     return {
       id: row.id,
@@ -107,7 +110,7 @@ const HM = (function () {
   }
 
   function mapVehicleForBackup(row) {
-    const fotos = row.midias_veiculo || [];
+    const fotos = (row.midias_veiculo || []).slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
     return {
       id: row.id,
       tipo: row.categorias ? row.categorias.slug : null,
@@ -321,10 +324,18 @@ const HM = (function () {
       unwrap(await supabaseClient.from('midias_veiculo').delete().in('id', removidos.map(r => r.id)));
     }
 
-    // Garante exatamente uma foto "principal" (a marcada pela UI, ou a primeira
-    // que sobrar) — sempre zera tudo antes de marcar uma, nunca há duas
-    // marcadas ao mesmo tempo (respeita a constraint única do banco).
     if (images.length) {
+      // Ordem de exibição: reflete a posição atual no array — é isso que o
+      // gestor controla arrastando as fotos no painel. Sem restrição de
+      // unicidade na coluna, então as N atualizações rodam em paralelo com segurança.
+      await Promise.all(images.map(async (img, idx) => {
+        unwrap(await supabaseClient.from('midias_veiculo').update({ ordem: idx }).eq('id', img.id));
+      }));
+
+      // Garante exatamente uma foto "principal" (a marcada pela UI, ou a primeira
+      // que sobrar) — sempre zera tudo antes de marcar uma, nunca há duas
+      // marcadas ao mesmo tempo (respeita a constraint única do banco, por isso
+      // roda em sequência, diferente do bloco de ordem acima).
       const principalEscolhida = images.find(i => i.principal) || images[0];
       unwrap(await supabaseClient.from('midias_veiculo').update({ principal: false }).eq('veiculo_id', vehicleId));
       if (principalEscolhida.id) {
@@ -393,7 +404,7 @@ const HM = (function () {
     // INNER — só entram veículos com pelo menos uma foto — resolvido no
     // servidor, então funciona corretamente junto com a paginação (ao
     // contrário de filtrar depois de já ter baixado a página).
-    const midiasEmbed = comFoto ? 'midias_veiculo!inner(id, url, principal)' : 'midias_veiculo(id, url, principal)';
+    const midiasEmbed = comFoto ? 'midias_veiculo!inner(id, url, principal, ordem)' : 'midias_veiculo(id, url, principal, ordem)';
     let query = supabaseClient
       .from('veiculos')
       .select(`*, marcas(nome), categorias(slug), carrocerias(slug, nome), ${midiasEmbed}`, { count: 'exact' });
@@ -472,7 +483,7 @@ const HM = (function () {
 
   /** Busca um veículo específico pelo id — usado pelo link direto (?veiculo=) quando o veículo compartilhado não está na página atualmente carregada. Só retorna se estiver visível ao público (mesma regra do catálogo). */
   async function getVehicleById(id) {
-    const select = '*, marcas(nome), categorias(slug), carrocerias(slug, nome), midias_veiculo(id, url, principal)';
+    const select = '*, marcas(nome), categorias(slug), carrocerias(slug, nome), midias_veiculo(id, url, principal, ordem)';
     const row = unwrap(await supabaseClient.from('veiculos').select(select).eq('id', id).eq('ativo', true).eq('vendido', false).maybeSingle());
     return row ? mapVehicleRow(row) : null;
   }
@@ -860,7 +871,7 @@ const HM = (function () {
     // já recriado pelo seed do schema.sql, não um dado editável do usuário.
     const [marcasRes, veiculosRes, consigRes, configRes] = await Promise.all([
       supabaseClient.from('marcas').select('nome'),
-      supabaseClient.from('veiculos').select('*, marcas(nome), categorias(slug), midias_veiculo(url, principal)').order('created_at'),
+      supabaseClient.from('veiculos').select('*, marcas(nome), categorias(slug), midias_veiculo(url, principal, ordem)').order('created_at'),
       supabaseClient.from('consignacoes').select('*').order('created_at'),
       supabaseClient.from('configuracoes_loja').select('*').eq('id', 1).single(),
     ]);

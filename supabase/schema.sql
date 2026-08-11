@@ -910,3 +910,34 @@ create index if not exists idx_veiculos_carroceria on veiculos (carroceria_id);
 create index if not exists idx_veiculos_ano on veiculos (ano);
 create index if not exists idx_veiculos_km on veiculos (km);
 create index if not exists idx_veiculos_reservado on veiculos (reservado);
+
+-- ============================================================================
+-- PARTE 10 — Ordem das fotos do veículo (arrastar-e-soltar no painel)
+-- ----------------------------------------------------------------------------
+-- Idempotente como o resto do schema.
+-- ============================================================================
+
+alter table midias_veiculo add column if not exists ordem integer not null default 0;
+
+-- Backfill: preserva a ordem visual atual (capa primeiro, depois por data de
+-- criação) para quem já tem fotos cadastradas — só entra em jogo quando o
+-- gestor arrastar alguma foto pela primeira vez. Roda apenas se ainda não há
+-- nenhuma foto com ordem definida, então reexecutar o arquivo não embaralha
+-- uma ordenação manual já feita depois desta migração.
+do $$
+begin
+  if not exists (select 1 from midias_veiculo where ordem <> 0) then
+    with numerado as (
+      select id, row_number() over (
+        partition by veiculo_id
+        order by principal desc, created_at asc, id asc
+      ) - 1 as rn
+      from midias_veiculo
+    )
+    update midias_veiculo m set ordem = n.rn
+    from numerado n
+    where n.id = m.id;
+  end if;
+end $$;
+
+create index if not exists idx_midias_veiculo_ordem on midias_veiculo (veiculo_id, ordem);
