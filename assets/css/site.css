@@ -200,15 +200,10 @@ nav[aria-label="Principal"] a:hover, nav[aria-label="Principal"] a:focus-visible
 .step-txt { font-size: 13px; color: var(--off-white); }
 
 /* ─── SOBRE ─── */
-.sobre-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center; margin-top: 60px; }
-.sobre-showroom { position: relative; border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); }
-.sobre-map-embed { width: 100%; height: 360px; border: 0; display: block; background: var(--dark2); filter: grayscale(0.15) contrast(1.05); }
-.sobre-tag-float { position: absolute; bottom: 24px; left: 24px; background: rgba(10,10,10,0.9); border: 1px solid rgba(255,255,255,0.1); padding: 16px 20px; border-radius: 4px; backdrop-filter: blur(8px); }
-.sobre-tag-float p { font-size: 12px; color: var(--gray-light); font-weight: 300; }
-.sobre-tag-float strong { font-size: 16px; font-weight: 700; display: block; margin-bottom: 2px; }
+.sobre-text { max-width: 700px; margin-top: 28px; }
 .sobre-text p { font-size: 16px; font-weight: 300; color: var(--gray-light); line-height: 1.7; margin-bottom: 20px; }
 .sobre-text p strong { color: var(--white); font-weight: 600; }
-.sobre-values { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 32px; list-style: none; }
+.sobre-values { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 40px; list-style: none; }
 .sobre-val { padding: 20px; background: var(--dark); border: 1px solid rgba(255,255,255,0.07); border-radius: 4px; }
 .sobre-val h3 { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
 .sobre-val p { font-size: 12px; color: var(--gray-light); line-height: 1.5; }
@@ -328,13 +323,13 @@ footer { background: var(--black); border-top: 1px solid rgba(255,255,255,0.07);
   .hero-inner { grid-template-columns: 1fr; gap: 40px; padding: 40px 20px; }
   .hero-visual { order: -1; }
   .vehicles-grid { grid-template-columns: repeat(2, 1fr); }
-  .consig-grid, .sobre-grid, .contato-grid { grid-template-columns: 1fr; gap: 40px; }
+  .consig-grid, .contato-grid { grid-template-columns: 1fr; gap: 40px; }
   .section { padding: 64px 20px; }
   .stats-inner { gap: 40px; }
   .footer-inner { flex-direction: column; text-align: center; }
   .footer-nav { justify-content: center; }
   .modal-specs { grid-template-columns: repeat(2, 1fr); }
-  .sobre-values { grid-template-columns: 1fr; }
+  .sobre-values { grid-template-columns: repeat(2, 1fr); }
 
   /* Filtros avançados viram uma gaveta (drawer) que sobe do rodapé, acionada pelo botão "Filtrar" */
   .filters-open-btn { display: inline-flex; }
@@ -365,6 +360,7 @@ footer { background: var(--black); border-top: 1px solid rgba(255,255,255,0.07);
   .hero-h1 { font-size: 48px; }
   .modal-actions { flex-direction: column; }
   .consig-big { font-size: 60px; }
+  .sobre-values { grid-template-columns: 1fr; }
 }
 
 /* Animações de entrada do hero */

@@ -124,14 +124,9 @@
     document.getElementById('contatoWppLink').textContent = formatPhoneDisplay(cfg.wpp);
 
     document.getElementById('heroSub').textContent = cfg.about;
-    document.getElementById('sobreNome').textContent = cfg.name;
-    document.getElementById('sobreEndereco').textContent = cfg.address;
     document.getElementById('mapAddress').innerHTML = cfg.address.replace(/, /g, ',<br>');
     document.getElementById('contatoAddress').innerHTML = cfg.address.replace(/, /g, ',<br>');
     document.getElementById('mapLink').href = 'https://maps.google.com/?q=' + encodeURIComponent(cfg.address);
-    // Mapa embutido (sem chave de API) — usa o mesmo endereço configurado no
-    // painel, então se a loja mudar de lugar o mapa acompanha sozinho.
-    document.getElementById('sobreMap').src = 'https://www.google.com/maps?q=' + encodeURIComponent(cfg.address) + '&output=embed';
     document.getElementById('horarioSemana').textContent = cfg.h1;
     document.getElementById('horarioSabado').textContent = cfg.h2;
     document.getElementById('instaLink').href = 'https://instagram.com/' + cfg.insta.replace('@', '');
