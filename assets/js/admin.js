@@ -630,19 +630,47 @@
     const saveBtn = document.getElementById('vehicleSaveBtn');
     saveBtn.disabled = true;
     try {
+      let fotos;
       if (editId) {
         data.expectedUpdatedAt = document.getElementById('vUpdatedAt').value || null;
-        await HM.updateVehicle(editId, data);
+        const res = await HM.updateVehicle(editId, data);
+        document.getElementById('vUpdatedAt').value = res.updatedAt || '';
+        fotos = res.fotos;
         toast('Veículo atualizado com sucesso!', 'success');
       } else {
-        await HM.createVehicle(data);
+        const res = await HM.createVehicle(data);
+        // A partir daqui o veículo EXISTE. Passar o formulário para modo de
+        // edição garante que um segundo clique em Salvar (por exemplo depois de
+        // um aviso de foto que não subiu) atualize este cadastro em vez de criar
+        // uma duplicata — foi assim que nasceram os dois Polo de 31/08/2026.
+        document.getElementById('vId').value = res.id;
+        document.getElementById('vUpdatedAt').value = res.updatedAt || '';
+        document.getElementById('vehicleModalTitle').textContent = 'Editar Veículo';
+        fotos = res.fotos;
         toast('Veículo adicionado com sucesso!', 'success');
       }
+
       await Promise.all([loadVehiclePage(true), renderDashboard()]);
+
+      // Fotos que não subiram não invalidam o cadastro: ele fica salvo, o modal
+      // continua aberto com as fotos que faltaram e um novo Salvar reenvia só elas.
+      if (fotos && fotos.falhas) {
+        const n = fotos.falhas;
+        errEl.textContent = `${n} ${n === 1 ? 'foto não pôde ser enviada' : 'fotos não puderam ser enviadas'} (conexão instável). O veículo está salvo — clique em Salvar de novo para tentar enviar ${n === 1 ? 'essa foto' : 'essas fotos'}.`;
+        toast(`Veículo salvo, mas ${n} ${n === 1 ? 'foto ficou' : 'fotos ficaram'} de fora.`, 'warn');
+        return; // mantém o modal aberto para o gestor reenviar
+      }
       closeVehicleModal();
     } catch (err) {
       console.error('[admin] Falha ao salvar veículo.', err);
-      errEl.textContent = (err instanceof HM.ConcurrencyError) ? err.message : 'Não foi possível salvar o veículo. Tente novamente.';
+      if (err instanceof HM.ConcurrencyError) {
+        // Ressincroniza o carimbo para o próximo clique conseguir gravar.
+        if (err.updatedAt) document.getElementById('vUpdatedAt').value = err.updatedAt;
+        loadVehiclePage(true);
+        errEl.textContent = err.message;
+      } else {
+        errEl.textContent = 'Não foi possível salvar o veículo. Verifique sua conexão e tente novamente.';
+      }
     } finally {
       saveBtn.disabled = false;
     }

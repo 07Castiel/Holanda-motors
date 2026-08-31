@@ -30,9 +30,19 @@ const HM = (function () {
     return 'R$ ' + Number(n || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
   }
 
-  /** Extrai o valor numérico de uma string formatada (ex: "R$ 119.900" → 119900). */
+  /**
+   * Extrai o valor numérico de uma string formatada (ex: "R$ 119.900" → 119900).
+   *
+   * A vírgula é tratada como separador decimal do pt-BR: tudo depois dela são
+   * centavos e é descartado. Sem esse corte, "R$ 119.900,00" virava 11990000
+   * (cem vezes o valor real) — o ponto de milhar e a vírgula eram removidos
+   * como se fossem o mesmo tipo de separador.
+   */
   function parsePrice(str) {
-    return Number(String(str || '').replace(/[^\d]/g, '')) || 0;
+    let s = String(str || '').replace(/[^\d.,]/g, '');
+    const virgula = s.lastIndexOf(',');
+    if (virgula !== -1) s = s.slice(0, virgula);
+    return Number(s.replace(/\D/g, '')) || 0;
   }
 
   /** Formata km com separador de milhar em pt-BR (ex: 18400 → "18.400 km"). */
@@ -283,12 +293,49 @@ const HM = (function () {
     unwrap(await query);
   }
 
+  /** Envia uma foto ao Storage, com novas tentativas em falha de rede/gateway.
+   *
+   * Achado no incidente de 31/08/2026: subindo ~19 fotos de uma vez a partir de
+   * uma conexão residencial, o gateway derrubava as requisições mais lentas com
+   * HTTP 520 (resposta vazia da origem) mesmo com o arquivo chegando ao destino.
+   * Sem repetição, uma única foto perdida derrubava o cadastro inteiro.
+   *
+   * Cada tentativa usa um caminho novo — se a anterior tiver de fato gravado o
+   * arquivo antes de o gateway cortar, o retry não esbarra em "objeto já existe"
+   * (o arquivo a mais vira lixo no bucket, mas nunca uma foto perdida). */
+  const UPLOAD_TENTATIVAS = 3;
   async function uploadVehicleImage(fileOrBlob, vehicleId) {
     const ext = (fileOrBlob.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
-    const path = `${vehicleId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    unwrap(await supabaseClient.storage.from(FOTOS_BUCKET).upload(path, fileOrBlob, { contentType: fileOrBlob.type }));
-    const { data } = supabaseClient.storage.from(FOTOS_BUCKET).getPublicUrl(path);
-    return { path, url: data.publicUrl };
+    let ultimoErro;
+    for (let tentativa = 1; tentativa <= UPLOAD_TENTATIVAS; tentativa++) {
+      const path = `${vehicleId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const { error } = await supabaseClient.storage.from(FOTOS_BUCKET).upload(path, fileOrBlob, { contentType: fileOrBlob.type });
+      if (!error) {
+        const { data } = supabaseClient.storage.from(FOTOS_BUCKET).getPublicUrl(path);
+        return { path, url: data.publicUrl };
+      }
+      ultimoErro = error;
+      console.warn(`[HM] Falha ao enviar foto (tentativa ${tentativa}/${UPLOAD_TENTATIVAS}).`, error);
+      if (tentativa < UPLOAD_TENTATIVAS) await new Promise(r => setTimeout(r, 700 * tentativa));
+    }
+    throw ultimoErro;
+  }
+
+  /** Executa as tarefas com no máximo `limite` em andamento ao mesmo tempo.
+   * Ao contrário de Promise.all, nenhuma tarefa é abandonada quando outra
+   * falha: o retorno traz uma entrada por tarefa, com `ok` dizendo se deu certo. */
+  async function comLimiteDeConcorrencia(tarefas, limite) {
+    const resultados = new Array(tarefas.length);
+    let proxima = 0;
+    async function trabalhador() {
+      while (proxima < tarefas.length) {
+        const i = proxima++;
+        try { resultados[i] = { ok: true, valor: await tarefas[i]() }; }
+        catch (err) { resultados[i] = { ok: false, erro: err }; }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(limite, tarefas.length) }, trabalhador));
+    return resultados;
   }
 
   /**
@@ -296,17 +343,35 @@ const HM = (function () {
    * `images`: [{ id?: uuid (foto já existente a manter), file?: Blob (foto nova
    * a enviar), url?: string (URL já existente ou colada), principal: boolean }]
    *
+   * Retorna { enviadas, falhas } em vez de lançar erro quando alguma foto não
+   * sobe: o veículo em si já está gravado nesse ponto, então derrubar a
+   * operação inteira por causa de uma foto fazia o painel dizer "não foi
+   * possível salvar" para um cadastro que existia — e o gestor, ao clicar de
+   * novo, criava uma duplicata. Agora o chamador recebe a contagem e avisa que
+   * N fotos ficaram de fora, sem perder o resto do trabalho. Só erro de banco
+   * (não de upload) continua sendo lançado.
+   *
    * Ordem importante (achado na auditoria): as fotos novas são enviadas ANTES
    * de remover as antigas — se o upload falhar no meio do caminho, o veículo
    * não fica sem nenhuma foto por causa disso.
    */
+  const UPLOADS_SIMULTANEOS = 3;
   async function saveVehicleImages(vehicleId, images) {
     const existentes = unwrap(await supabaseClient.from('midias_veiculo').select('id, storage_path').eq('veiculo_id', vehicleId));
+
+    // Defesa contra ids de OUTRO veículo (acontecia quando uma tentativa de
+    // salvar falhava, o modal continuava aberto com os ids já atribuídos e o
+    // clique seguinte criava um veículo novo: as fotos da tentativa anterior
+    // eram tratadas como "já existentes" e a ordem/capa acabava sendo gravada
+    // nas linhas do veículo errado). Só ids que pertencem a ESTE veículo valem.
+    const idsDesteVeiculo = new Set(existentes.map(e => e.id));
+    images.forEach(img => { if (img.id && !idsDesteVeiculo.has(img.id)) img.id = null; });
+
     const mantidosIds = new Set(images.filter(i => i.id).map(i => i.id));
     const removidos = existentes.filter(e => !mantidosIds.has(e.id));
 
     const novos = images.filter(i => !i.id);
-    await Promise.all(novos.map(async img => {
+    const resultados = await comLimiteDeConcorrencia(novos.map(img => async () => {
       let storagePath = null;
       let url = img.url;
       if (img.file) {
@@ -316,19 +381,30 @@ const HM = (function () {
       }
       const inserida = unwrap(await supabaseClient.from('midias_veiculo').insert({ veiculo_id: vehicleId, storage_path: storagePath, url, principal: false }).select('id').single());
       img.id = inserida.id;
-    }));
+    }), UPLOADS_SIMULTANEOS);
 
-    if (removidos.length) {
+    const falhas = resultados.filter(r => !r.ok);
+    falhas.forEach(f => console.error('[HM] Foto não pôde ser enviada.', f.erro));
+
+    // Fotos que não subiram continuam no array sem id — tirar daqui evita que
+    // os passos de ordem/capa abaixo tentem atualizar uma linha inexistente.
+    const gravadas = images.filter(i => i.id);
+
+    // Excluir as fotos tiradas da galeria só quando TUDO que era para entrar
+    // entrou. Se alguma subida falhou, a remoção espera o próximo Salvar — assim
+    // uma troca de fotos com internet ruim nunca deixa o anúncio mais pobre do
+    // que começou (mesma ideia do "enviar antes de remover" acima).
+    if (removidos.length && !falhas.length) {
       const paths = removidos.filter(r => r.storage_path).map(r => r.storage_path);
       if (paths.length) unwrap(await supabaseClient.storage.from(FOTOS_BUCKET).remove(paths));
       unwrap(await supabaseClient.from('midias_veiculo').delete().in('id', removidos.map(r => r.id)));
     }
 
-    if (images.length) {
+    if (gravadas.length) {
       // Ordem de exibição: reflete a posição atual no array — é isso que o
       // gestor controla arrastando as fotos no painel. Sem restrição de
       // unicidade na coluna, então as N atualizações rodam em paralelo com segurança.
-      await Promise.all(images.map(async (img, idx) => {
+      await Promise.all(gravadas.map(async (img, idx) => {
         unwrap(await supabaseClient.from('midias_veiculo').update({ ordem: idx }).eq('id', img.id));
       }));
 
@@ -336,12 +412,12 @@ const HM = (function () {
       // que sobrar) — sempre zera tudo antes de marcar uma, nunca há duas
       // marcadas ao mesmo tempo (respeita a constraint única do banco, por isso
       // roda em sequência, diferente do bloco de ordem acima).
-      const principalEscolhida = images.find(i => i.principal) || images[0];
+      const principalEscolhida = gravadas.find(i => i.principal) || gravadas[0];
       unwrap(await supabaseClient.from('midias_veiculo').update({ principal: false }).eq('veiculo_id', vehicleId));
-      if (principalEscolhida.id) {
-        unwrap(await supabaseClient.from('midias_veiculo').update({ principal: true }).eq('id', principalEscolhida.id));
-      }
+      unwrap(await supabaseClient.from('midias_veiculo').update({ principal: true }).eq('id', principalEscolhida.id));
     }
+
+    return { enviadas: resultados.length - falhas.length, falhas: falhas.length };
   }
 
   function vehiclePayload(input, categoriaId, marcaId, carroceriaId) {
@@ -477,7 +553,15 @@ const HM = (function () {
 
     const from = page * pageSize;
     const { data, error, count } = await query.range(from, from + pageSize - 1);
-    if (error) throw error;
+    if (error) {
+      // PGRST103 = faixa pedida além do fim do resultado (HTTP 416). Acontece
+      // quando o total é múltiplo exato do tamanho da página e o painel pede a
+      // página seguinte: em vez de quebrar a listagem inteira, devolve vazio.
+      // O total é exatamente "from" — só se chega aqui quando não há nada além
+      // do que já foi carregado —, então o botão "carregar mais" some sozinho.
+      if (error.code === 'PGRST103') return { rows: [], total: from, page, pageSize };
+      throw error;
+    }
     return { rows: data.map(mapVehicleRow), total: count || 0, page, pageSize };
   }
 
@@ -511,29 +595,55 @@ const HM = (function () {
     return { total, ativos, carros, motos, consignados, destaque, vendidos };
   }
 
+  /** Retorna { id, updatedAt, fotos: { enviadas, falhas } } — o chamador usa
+   * `id`/`updatedAt` para converter o formulário aberto em modo de edição e não
+   * criar uma duplicata se o gestor clicar em Salvar de novo. */
   async function createVehicle(input) {
     const [categoriaId, marcaId, carroceriaId] = await Promise.all([getCategoriaId(input.tipo), ensureMarca(input.make), getCarroceriaId(input.carroceria)]);
     if (input.badge === 'destaque') await clearDestaque(null);
-    const created = unwrap(await supabaseClient.from('veiculos').insert(vehiclePayload(input, categoriaId, marcaId, carroceriaId)).select('id').single());
-    if (input.images) await saveVehicleImages(created.id, input.images);
-    await logAction('criar', 'veiculo', created.id, { resumo: `cadastrou ${input.make} ${input.model}` });
-    return created.id;
+    const created = unwrap(await supabaseClient.from('veiculos').insert(vehiclePayload(input, categoriaId, marcaId, carroceriaId)).select('id, updated_at').single());
+    let fotos = { enviadas: 0, falhas: 0 };
+    try {
+      if (input.images) fotos = await saveVehicleImages(created.id, input.images);
+    } finally {
+      // Registra a criação mesmo se as fotos derem problema — o veículo existe
+      // a partir daqui, e um histórico sem esse registro foi o que escondeu o
+      // cadastro duplicado do incidente de 31/08/2026.
+      await logAction('criar', 'veiculo', created.id, { resumo: `cadastrou ${input.make} ${input.model}` });
+    }
+    return { id: created.id, updatedAt: created.updated_at, fotos };
   }
 
+  /** Retorna { updatedAt, fotos: { enviadas, falhas } }. O `updatedAt` novo tem
+   * de voltar para o formulário: como todo update grava um carimbo novo, manter
+   * o antigo em tela fazia o clique seguinte bater em 0 linhas e acusar um
+   * conflito de edição que nunca existiu. */
   async function updateVehicle(id, input) {
     const [categoriaId, marcaId, carroceriaId] = await Promise.all([getCategoriaId(input.tipo), ensureMarca(input.make), getCarroceriaId(input.carroceria)]);
     if (input.badge === 'destaque') await clearDestaque(id);
 
     let query = supabaseClient.from('veiculos').update(vehiclePayload(input, categoriaId, marcaId, carroceriaId)).eq('id', id);
     if (input.expectedUpdatedAt) query = query.eq('updated_at', input.expectedUpdatedAt);
-    const { data, error } = await query.select('id');
+    const { data, error } = await query.select('id, updated_at');
     if (error) throw error;
     if (input.expectedUpdatedAt && (!data || !data.length)) {
-      throw new ConcurrencyError('Este veículo foi alterado por outra pessoa enquanto você editava. Recarregue a lista e tente novamente.');
+      // Recupera o carimbo atual e devolve junto do erro para o painel poder
+      // se ressincronizar — sem isso o formulário ficava travado para sempre.
+      const atual = unwrap(await supabaseClient.from('veiculos').select('updated_at').eq('id', id).maybeSingle());
+      const err = new ConcurrencyError(atual
+        ? 'Este veículo foi alterado depois que você abriu a edição. Recarregamos os dados — confira e clique em Salvar de novo.'
+        : 'Este veículo não existe mais. Recarregue a lista.');
+      err.updatedAt = atual ? atual.updated_at : null;
+      throw err;
     }
 
-    if (input.images) await saveVehicleImages(id, input.images);
-    await logAction('atualizar', 'veiculo', id, { resumo: `atualizou ${input.make} ${input.model}` });
+    let fotos = { enviadas: 0, falhas: 0 };
+    try {
+      if (input.images) fotos = await saveVehicleImages(id, input.images);
+    } finally {
+      await logAction('atualizar', 'veiculo', id, { resumo: `atualizou ${input.make} ${input.model}` });
+    }
+    return { updatedAt: data[0].updated_at, fotos };
   }
 
   async function deleteVehicle(id) {
