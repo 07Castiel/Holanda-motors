@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../assets/css/base.css?v=5">
-<link rel="stylesheet" href="../assets/css/admin.css?v=8">
+<link rel="stylesheet" href="../assets/css/admin.css?v=9">
 </head>
 <body>
 
@@ -158,14 +158,6 @@
             <option value="consignado">Consignado</option>
             <option value="destaque">Destaque</option>
           </select>
-          <label class="sr-only" for="filterSituacao">Filtrar por situação</label>
-          <select class="filter-select" id="filterSituacao">
-            <option value="">Todas as situações</option>
-            <option value="disponivel">Disponível</option>
-            <option value="reservado">Reservado</option>
-            <option value="vendido">Vendido</option>
-            <option value="indisponivel">Indisponível</option>
-          </select>
         </div>
         <div class="search-bar">
           <label class="sr-only" for="filterCambio">Filtrar por câmbio</label>
@@ -221,6 +213,19 @@
           </label>
           <button type="button" class="filters-adv-clear" id="filterClearBtn" hidden>Limpar filtros</button>
         </div>
+
+        <!-- Abas por situação: cada veículo cai em exatamente uma delas (as
+             combinações são as mesmas de STATUS_FILTROS em data.js), então o
+             estoque à venda não fica misturado com vendidos e ocultos e a soma
+             das quatro primeiras é sempre o total de "Todos". -->
+        <div class="status-tabs" id="vehicleStatusTabs" role="tablist" aria-label="Situação dos veículos">
+          <button class="status-tab is-active" type="button" role="tab" aria-selected="true" data-situacao="disponivel">Em estoque <span class="status-tab-count" data-count="disponivel"></span></button>
+          <button class="status-tab" type="button" role="tab" aria-selected="false" data-situacao="reservado">Reservados <span class="status-tab-count" data-count="reservado"></span></button>
+          <button class="status-tab" type="button" role="tab" aria-selected="false" data-situacao="indisponivel">Ocultos <span class="status-tab-count" data-count="indisponivel"></span></button>
+          <button class="status-tab" type="button" role="tab" aria-selected="false" data-situacao="vendido">Vendidos <span class="status-tab-count" data-count="vendido"></span></button>
+          <button class="status-tab" type="button" role="tab" aria-selected="false" data-situacao="">Todos <span class="status-tab-count" data-count="todos"></span></button>
+        </div>
+
         <div class="table-wrap">
           <table>
             <caption class="sr-only">Lista de veículos cadastrados</caption>
@@ -584,7 +589,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.2"></script>
 <script src="../assets/js/supabase-client.js?v=4"></script>
-<script src="../assets/js/data.js?v=8"></script>
-<script src="../assets/js/admin.js?v=8"></script>
+<script src="../assets/js/data.js?v=9"></script>
+<script src="../assets/js/admin.js?v=9"></script>
 </body>
 </html>

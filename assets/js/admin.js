@@ -234,7 +234,9 @@
 
   /* ── TABELA DE VEÍCULOS (paginada + busca instantânea) ── */
   const VEHICLE_STATE_DEFAULTS = {
-    page: 0, pageSize: 20, search: '', tipo: '', carroceriaId: '', badge: '', situacao: '',
+    // "situacao" é a aba aberta, não um filtro comum: abre em "Em estoque"
+    // para o gestor não ver vendidos e ocultos misturados com o que está à venda.
+    page: 0, pageSize: 20, search: '', tipo: '', carroceriaId: '', badge: '', situacao: 'disponivel',
     cambio: '', combustivel: '', cor: '',
     anoMin: null, anoMax: null, precoMin: null, precoMax: null, kmMax: null,
     dataCadastroDe: '', dataCadastroAte: '', dataAtualizacaoDe: '', dataAtualizacaoAte: '',
@@ -294,7 +296,36 @@
   document.getElementById('filterTipo').addEventListener('change', e => { vehicleState.tipo = e.target.value; loadVehiclePage(true); });
   document.getElementById('filterCarroceria').addEventListener('change', e => { vehicleState.carroceriaId = e.target.value; loadVehiclePage(true); });
   document.getElementById('filterBadge').addEventListener('change', e => { vehicleState.badge = e.target.value; loadVehiclePage(true); });
-  document.getElementById('filterSituacao').addEventListener('change', e => { vehicleState.situacao = e.target.value; loadVehiclePage(true); });
+  /* ── ABAS POR SITUAÇÃO ── */
+  const statusTabsEl = document.getElementById('vehicleStatusTabs');
+
+  statusTabsEl.querySelectorAll('.status-tab').forEach(tab => tab.addEventListener('click', () => {
+    if (vehicleState.situacao === tab.dataset.situacao) return;
+    vehicleState.situacao = tab.dataset.situacao;
+    syncStatusTabs();
+    loadVehiclePage(true);
+  }));
+
+  function syncStatusTabs() {
+    statusTabsEl.querySelectorAll('.status-tab').forEach(tab => {
+      const ativa = tab.dataset.situacao === vehicleState.situacao;
+      tab.classList.toggle('is-active', ativa);
+      tab.setAttribute('aria-selected', ativa ? 'true' : 'false');
+    });
+  }
+
+  /** Números ao lado do nome de cada aba. Falha silenciosa: é informação
+   * secundária, não vale derrubar a listagem se a contagem não vier. */
+  async function refreshStatusCounts() {
+    try {
+      const counts = await HM.getVehicleStatusCounts();
+      statusTabsEl.querySelectorAll('.status-tab-count').forEach(el => {
+        el.textContent = counts[el.dataset.count] != null ? counts[el.dataset.count] : '';
+      });
+    } catch (err) {
+      console.error('[admin] Falha ao contar veículos por situação.', err);
+    }
+  }
   document.getElementById('filterCambio').addEventListener('change', e => { vehicleState.cambio = e.target.value; loadVehiclePage(true); });
   document.getElementById('filterCombustivel').addEventListener('change', e => { vehicleState.combustivel = e.target.value; loadVehiclePage(true); });
   document.getElementById('filterCor').addEventListener('change', e => { vehicleState.cor = e.target.value; loadVehiclePage(true); });
@@ -337,7 +368,9 @@
   });
 
   function vehicleFiltrosAtivos() {
-    return !!(vehicleState.search || vehicleState.tipo || vehicleState.carroceriaId || vehicleState.badge || vehicleState.situacao ||
+    // "situacao" fica de fora de propósito: é a aba aberta, não um filtro —
+    // "Limpar filtros" não deve tirar o gestor da aba em que ele está.
+    return !!(vehicleState.search || vehicleState.tipo || vehicleState.carroceriaId || vehicleState.badge ||
       vehicleState.cambio || vehicleState.combustivel || vehicleState.cor ||
       vehicleState.anoMin != null || vehicleState.anoMax != null ||
       vehicleState.precoMin != null || vehicleState.precoMax != null || vehicleState.kmMax != null ||
@@ -349,12 +382,13 @@
   }
 
   document.getElementById('filterClearBtn').addEventListener('click', () => {
+    const abaAtual = vehicleState.situacao;
     resetVehicleState();
+    vehicleState.situacao = abaAtual; // limpar filtros não muda de aba
     document.getElementById('searchVehicle').value = '';
     document.getElementById('filterTipo').value = '';
     document.getElementById('filterCarroceria').value = '';
     document.getElementById('filterBadge').value = '';
-    document.getElementById('filterSituacao').value = '';
     document.getElementById('filterCambio').value = '';
     document.getElementById('filterCombustivel').value = '';
     document.getElementById('filterCor').value = '';
@@ -385,6 +419,8 @@
     const loadMoreBtn = document.getElementById('vehicleLoadMoreBtn');
     loadMoreBtn.disabled = true;
     updateVehicleFilterClearVisibility();
+    syncStatusTabs();
+    refreshStatusCounts(); // sem await: os números chegam depois, a lista não espera
     try {
       const opts = {
         page: pageToLoad, pageSize: vehicleState.pageSize, search: vehicleState.search,
@@ -455,10 +491,10 @@
         <td>
           <div class="actions">
             <button class="btn-icon toggle" type="button" data-toggle="${v.id}" ${v.vendido ? 'disabled' : ''} aria-label="${v.ativo ? 'Ocultar do site' : 'Exibir no site'}">${v.ativo ? ICON_EYE_OFF : ICON_EYE}</button>
+            ${podeExcluir ? `<button class="btn-icon del" type="button" data-del="${v.id}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="Excluir ${escapeHtml(v.make)} ${escapeHtml(v.model)}">${ICON_DEL}</button>` : ''}
             <button class="btn-icon reserve ${v.reservado ? 'is-active' : ''}" type="button" data-reserve="${v.id}" data-reservado="${v.reservado ? '1' : '0'}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" ${v.vendido ? 'disabled' : ''} aria-label="${v.reservado ? 'Remover reserva' : 'Marcar como reservado'}">${ICON_BOOKMARK}</button>
             <button class="btn-icon sold" type="button" data-sold="${v.id}" data-vendido="${v.vendido ? '1' : '0'}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="${v.vendido ? 'Reverter para disponível' : 'Marcar como vendido'}">${ICON_TAG}</button>
             <button class="btn-icon edit" type="button" data-edit="${v.id}" aria-label="Editar ${escapeHtml(v.make)} ${escapeHtml(v.model)}">${ICON_EDIT}</button>
-            ${podeExcluir ? `<button class="btn-icon del" type="button" data-del="${v.id}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="Excluir ${escapeHtml(v.make)} ${escapeHtml(v.model)}">${ICON_DEL}</button>` : ''}
           </div>
         </td>
       </tr>`;
@@ -484,9 +520,9 @@
   async function toggleVisible(id) {
     try {
       const novoEstado = await HM.toggleVehicleAtivo(id);
-      const v = vehicleState.rows.find(x => x.id === id);
-      if (v) v.ativo = novoEstado;
-      renderVehicleTable();
+      // Recarrega em vez de só repintar a linha: com as abas por situação, o
+      // veículo acabou de sair desta aba (Em estoque <-> Ocultos).
+      await loadVehiclePage(true);
       renderDashboard();
       toast(novoEstado ? 'Veículo exibido no site.' : 'Veículo ocultado do site.', 'success');
     } catch (err) {
@@ -499,9 +535,7 @@
     const novo = !reservadoAtual;
     try {
       await HM.setVehicleReservado(id, novo, label);
-      const v = vehicleState.rows.find(x => x.id === id);
-      if (v) v.reservado = novo;
-      renderVehicleTable();
+      await loadVehiclePage(true); // mudou de aba (Em estoque <-> Reservados)
       toast(novo ? 'Veículo marcado como reservado.' : 'Reserva removida.', 'success');
     } catch (err) {
       console.error('[admin] Falha ao atualizar reserva.', err);
@@ -513,9 +547,7 @@
     const novo = !vendidoAtual;
     try {
       await HM.setVehicleVendido(id, novo, label);
-      const v = vehicleState.rows.find(x => x.id === id);
-      if (v) { v.vendido = novo; if (novo) v.ativo = false; }
-      renderVehicleTable();
+      await loadVehiclePage(true); // mudou de aba (Vendidos <-> Em estoque/Ocultos)
       renderDashboard();
       toast(novo ? 'Veículo marcado como vendido.' : 'Veículo revertido para disponível.', 'success');
     } catch (err) {

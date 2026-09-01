@@ -595,6 +595,24 @@ const HM = (function () {
     return { total, ativos, carros, motos, consignados, destaque, vendidos };
   }
 
+  /** Quantos veículos há em cada aba da tela de Veículos. As combinações são
+   * exatamente as de STATUS_FILTROS, então cada veículo cai em uma aba e só
+   * uma — a soma das quatro é sempre o total do estoque. */
+  async function getVehicleStatusCounts() {
+    const contar = async (builder) => {
+      const { count, error } = await builder;
+      if (error) throw error;
+      return count || 0;
+    };
+    const base = () => supabaseClient.from('veiculos').select('id', { count: 'exact', head: true });
+    const aplicar = (filtros) => Object.entries(filtros).reduce((q, [col, val]) => q.eq(col, val), base());
+    const chaves = Object.keys(STATUS_FILTROS);
+    const valores = await Promise.all(chaves.map(k => contar(aplicar(STATUS_FILTROS[k]))));
+    const counts = { todos: 0 };
+    chaves.forEach((k, i) => { counts[k] = valores[i]; counts.todos += valores[i]; });
+    return counts;
+  }
+
   /** Retorna { id, updatedAt, fotos: { enviadas, falhas } } — o chamador usa
    * `id`/`updatedAt` para converter o formulário aberto em modo de edição e não
    * criar uma duplicata se o gestor clicar em Salvar de novo. */
@@ -1067,6 +1085,7 @@ const HM = (function () {
     // veículos
     getVehicles,
     getVehicleStats,
+    getVehicleStatusCounts,
     getVehicleById,
     getMarcasDisponiveis,
     getCoresDisponiveis,
