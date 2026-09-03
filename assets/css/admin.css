@@ -269,19 +269,25 @@ tbody td { padding: 14px 16px; font-size: 13px; vertical-align: middle; }
 .img-gallery-item { cursor: grab; touch-action: none; }
 .img-gallery-item.dragging { cursor: grabbing; z-index: 2; box-shadow: 0 6px 20px rgba(0,0,0,.5); transition: none; }
 .img-gallery-item.drag-over { outline: 2px dashed var(--red); outline-offset: -2px; }
-/* O número da posição divide o canto superior esquerdo com o botão "definir
-   como capa". Ele é só um rótulo, então nunca deve receber clique — sem o
-   pointer-events abaixo ele engolia o clique na estrela. E some enquanto os
-   botões estão à mostra, senão o número aparece por cima da estrela. */
+/* O número marca a posição da foto para o arrastar-e-soltar. Fica no canto
+   inferior direito, o único livre: os botões ocupam os dois de cima e a tag
+   "Capa" o inferior esquerdo. Antes dividia o canto com o botão de capa e
+   engolia o clique nele. Também é só um rótulo, então nunca recebe clique —
+   o que importa em telas de toque, onde os botões ficam sempre visíveis. */
 .img-gallery-item .gallery-order-tag {
-  position: absolute; top: 5px; left: 5px; z-index: 1;
+  position: absolute; bottom: 5px; right: 5px; z-index: 1;
   width: 18px; height: 18px; border-radius: 50%;
   background: rgba(0,0,0,.65); color: #fff; font-size: 10px; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
-  pointer-events: none; transition: opacity .15s;
+  pointer-events: none;
 }
-.img-gallery-item:hover .gallery-order-tag,
-.img-gallery-item:focus-within .gallery-order-tag { opacity: 0; }
+
+/* Celular e tablet não têm :hover — sem isto os botões de capa e remover
+   ficam invisíveis (ainda que clicáveis) para quem administra pelo telefone.
+   O degradê do .gallery-actions já garante contraste sobre a foto. */
+@media (hover: none) {
+  .img-gallery-item .gallery-actions { opacity: 1; }
+}
 
 /* ── HISTÓRICO / LOGS ── */
 .history-title { font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--gray); margin: 24px 0 10px; padding-top: 16px; border-top: 1px solid var(--border); }
