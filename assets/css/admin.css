@@ -258,7 +258,7 @@ tbody td { padding: 14px 16px; font-size: 13px; vertical-align: middle; }
 .img-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin-top: 12px; }
 .img-gallery-item { position: relative; border-radius: 4px; overflow: hidden; background: var(--dark3); aspect-ratio: 4/3; }
 .img-gallery-item img { width: 100%; height: 100%; object-fit: contain; }
-.img-gallery-item .gallery-actions { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: space-between; padding: 5px; background: linear-gradient(180deg, rgba(0,0,0,.5), transparent 40%); opacity: 0; transition: .15s; }
+.img-gallery-item .gallery-actions { position: absolute; inset: 0; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; padding: 5px; background: linear-gradient(180deg, rgba(0,0,0,.5), transparent 40%); opacity: 0; transition: .15s; }
 .img-gallery-item:hover .gallery-actions, .img-gallery-item .gallery-actions:focus-within { opacity: 1; }
 .img-gallery-item .gallery-btn { width: 22px; height: 22px; border-radius: 50%; border: none; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .img-gallery-item .gallery-btn.star.is-principal { background: var(--red); color: #fff; }
@@ -269,12 +269,19 @@ tbody td { padding: 14px 16px; font-size: 13px; vertical-align: middle; }
 .img-gallery-item { cursor: grab; touch-action: none; }
 .img-gallery-item.dragging { cursor: grabbing; z-index: 2; box-shadow: 0 6px 20px rgba(0,0,0,.5); transition: none; }
 .img-gallery-item.drag-over { outline: 2px dashed var(--red); outline-offset: -2px; }
+/* O número da posição divide o canto superior esquerdo com o botão "definir
+   como capa". Ele é só um rótulo, então nunca deve receber clique — sem o
+   pointer-events abaixo ele engolia o clique na estrela. E some enquanto os
+   botões estão à mostra, senão o número aparece por cima da estrela. */
 .img-gallery-item .gallery-order-tag {
   position: absolute; top: 5px; left: 5px; z-index: 1;
   width: 18px; height: 18px; border-radius: 50%;
   background: rgba(0,0,0,.65); color: #fff; font-size: 10px; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
+  pointer-events: none; transition: opacity .15s;
 }
+.img-gallery-item:hover .gallery-order-tag,
+.img-gallery-item:focus-within .gallery-order-tag { opacity: 0; }
 
 /* ── HISTÓRICO / LOGS ── */
 .history-title { font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--gray); margin: 24px 0 10px; padding-top: 16px; border-top: 1px solid var(--border); }
