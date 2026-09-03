@@ -1,2 +1,7 @@
 # Arquivo de backup/upload do projeto — não é código-fonte, não deve ir para o repositório
 holanda-motors.rar
+
+# Snapshots guardados à mão antes de mexer no banco pelo painel (ex.: o veículo
+# duplicado de 31/08/2026). São registros operacionais de um momento, não
+# código — ficam na máquina de quem salvou.
+backup-incidente-*.json
