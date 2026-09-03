@@ -164,6 +164,9 @@ const HM = (function () {
       name: row.nome,
       address: row.endereco,
       wpp: row.whatsapp,
+      // Número dedicado ao interesse em veículo específico. Vazio = usa o
+      // WhatsApp geral, então o site funciona mesmo antes da migração rodar.
+      wppVendas: row.whatsapp_vendas || '',
       insta: row.instagram,
       h1: row.horario_semana,
       h2: row.horario_sabado,
@@ -766,6 +769,7 @@ const HM = (function () {
       nome: cfg.name,
       endereco: cfg.address,
       whatsapp: cfg.wpp,
+      whatsapp_vendas: cfg.wppVendas,
       instagram: cfg.insta,
       horario_semana: cfg.h1,
       horario_sabado: cfg.h2,

@@ -941,3 +941,23 @@ begin
 end $$;
 
 create index if not exists idx_midias_veiculo_ordem on midias_veiculo (veiculo_id, ordem);
+
+-- ============================================================================
+-- PARTE 12 — WhatsApp de vendas (número separado do atendimento geral)
+-- ----------------------------------------------------------------------------
+-- Decisão do gestor: quem clica em "Tenho interesse" num veículo específico
+-- deve cair num número diferente do WhatsApp geral da loja (header, botão
+-- flutuante, consignação). São dois atendimentos distintos.
+--
+-- Fica vazio por padrão e o site trata vazio como "usa o WhatsApp geral"
+-- (ver assets/js/site.js), então a coluna é segura mesmo antes do gestor
+-- preencher. Idempotente como o resto do schema.
+-- ============================================================================
+
+alter table configuracoes_loja add column if not exists whatsapp_vendas text not null default '';
+
+-- Backfill do número informado pelo gestor — só preenche se ainda estiver
+-- vazio, então reexecutar o schema não sobrescreve uma troca feita no painel.
+update configuracoes_loja
+  set whatsapp_vendas = '5588921449902'
+  where coalesce(whatsapp_vendas, '') = '';

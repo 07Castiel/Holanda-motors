@@ -5,11 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Holanda Motors — Painel do Gestor</title>
 <meta name="robots" content="noindex, nofollow">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/img/favicon-32.png">
+<link rel="icon" type="image/png" sizes="512x512" href="../assets/img/favicon-512.png">
+<link rel="apple-touch-icon" href="../assets/img/apple-touch-icon.png">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../assets/css/base.css?v=5">
-<link rel="stylesheet" href="../assets/css/admin.css?v=9">
+<link rel="stylesheet" href="../assets/css/admin.css?v=10">
 </head>
 <body>
 
@@ -17,8 +21,7 @@
 <div id="loginScreen">
   <form class="login-box" id="loginForm" novalidate>
     <div class="login-logo">
-      <div class="top">HOLANDA</div>
-      <div class="sub">MOTORS</div>
+      <img src="../assets/img/logo-holanda.png" alt="Holanda Motors" width="872" height="208">
     </div>
     <span class="login-badge">Painel do Gestor</span>
     <div class="form-group">
@@ -51,8 +54,7 @@
   <!-- SIDEBAR -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-logo">
-      <div class="top">HOLANDA</div>
-      <div class="sub">MOTORS</div>
+      <img src="../assets/img/logo-holanda.png" alt="Holanda Motors" width="872" height="208">
       <span class="sidebar-badge">Painel do Gestor</span>
     </div>
     <ul class="sidebar-nav" id="sidebarNav">
@@ -376,7 +378,8 @@
               <h2>Dados da loja</h2>
               <div class="config-field"><label for="cfg-name">Nome da loja</label><input id="cfg-name"></div>
               <div class="config-field"><label for="cfg-address">Endereço</label><input id="cfg-address"></div>
-              <div class="config-field"><label for="cfg-wpp">WhatsApp (só números, com DDI 55)</label><input id="cfg-wpp" inputmode="numeric"></div>
+              <div class="config-field"><label for="cfg-wpp">WhatsApp geral (só números, com DDI 55)</label><input id="cfg-wpp" inputmode="numeric"><small class="config-hint">Header, botão flutuante, consignação e contato.</small></div>
+              <div class="config-field"><label for="cfg-wpp-vendas">WhatsApp de vendas (só números, com DDI 55)</label><input id="cfg-wpp-vendas" inputmode="numeric"><small class="config-hint">Recebe o interesse em um veículo específico. Vazio = usa o WhatsApp geral.</small></div>
               <div class="config-field"><label for="cfg-insta">Instagram</label><input id="cfg-insta"></div>
               <div class="config-field"><label for="cfg-h1">Horário (Seg–Sex)</label><input id="cfg-h1"></div>
               <div class="config-field"><label for="cfg-h2">Horário (Sábado)</label><input id="cfg-h2"></div>
@@ -589,7 +592,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.2"></script>
 <script src="../assets/js/supabase-client.js?v=4"></script>
-<script src="../assets/js/data.js?v=9"></script>
-<script src="../assets/js/admin.js?v=9"></script>
+<script src="../assets/js/data.js?v=10"></script>
+<script src="../assets/js/admin.js?v=10"></script>
 </body>
 </html>

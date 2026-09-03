@@ -185,7 +185,8 @@ O site é 100% estático e os dados dos veículos só existem depois que o JavaS
 
 A solução é a Edge Function [`supabase/functions/vehicle-preview/index.ts`](supabase/functions/vehicle-preview/index.ts), publicada no seu próprio projeto Supabase:
 
-- Toda mensagem de WhatsApp montada pelo site (botão "Tenho interesse" e "Copiar link" no modal de detalhes, botão de WhatsApp nos cards do catálogo) usa a URL `https://SEU-PROJETO.supabase.co/functions/v1/vehicle-preview/<id>` em vez do link direto do site.
+- O botão **"Copiar link"** no modal de detalhes copia a URL `https://SEU-PROJETO.supabase.co/functions/v1/vehicle-preview/<id>` em vez do link direto do site — é ela que garante o preview rico quando o link é colado no WhatsApp.
+- **As mensagens prontas de WhatsApp não levam essa URL.** Decisão do gestor: o texto termina em "gostaria de saber mais!", sem link. Quem quiser compartilhar o veículo com preview usa o "Copiar link".
 - Essa function busca o veículo no banco e devolve uma página HTML só com as tags Open Graph/Twitter Card certas (foto, título, preço) — é só isso que o rastreador lê.
 - Um visitante de verdade é redirecionado automaticamente (`<meta http-equiv="refresh">` + JavaScript) para o site real, em `index.html?veiculo=<id>`, quase instantaneamente.
 - É pública (`verify_jwt` desativado no deploy) de propósito — precisa ser alcançável por qualquer rastreador ou visitante sem login, e só devolve dados de veículos já públicos no site (mesma regra de RLS: `ativo = true` e `vendido = false`).

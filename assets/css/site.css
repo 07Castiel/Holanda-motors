@@ -17,9 +17,8 @@ header {
 }
 header.scrolled { background: rgba(10,10,10,0.98); }
 
-.logo-mark { display: flex; flex-direction: column; line-height: 1; text-decoration: none; }
-.logo-mark .top { font-family: var(--font-display); font-weight: 900; font-size: 22px; letter-spacing: 0.18em; color: var(--white); }
-.logo-mark .sub { font-family: var(--font-display); font-weight: 300; font-size: 10px; letter-spacing: 0.52em; color: var(--gray-light); margin-top: 1px; }
+.logo-mark { display: flex; align-items: center; text-decoration: none; }
+.logo-mark img { display: block; height: 32px; width: auto; }
 
 nav[aria-label="Principal"] { display: flex; align-items: center; gap: 36px; }
 nav[aria-label="Principal"] a { font-size: 13px; font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gray-light); text-decoration: none; transition: color 0.2s; }
@@ -236,8 +235,7 @@ nav[aria-label="Principal"] a:hover, nav[aria-label="Principal"] a:focus-visible
 /* ─── FOOTER ─── */
 footer { background: var(--black); border-top: 1px solid rgba(255,255,255,0.07); padding: 48px 40px; }
 .footer-inner { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 24px; }
-.footer-logo .top { font-family: var(--font-display); font-weight: 900; font-size: 18px; letter-spacing: 0.18em; }
-.footer-logo .sub { font-family: var(--font-display); font-weight: 300; font-size: 8px; letter-spacing: 0.52em; color: var(--gray-light); margin-top: 2px; }
+.footer-logo img { display: block; height: 26px; width: auto; }
 .footer-nav { display: flex; gap: 32px; flex-wrap: wrap; list-style: none; }
 .footer-nav a { font-size: 12px; font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gray-light); text-decoration: none; transition: color 0.2s; }
 .footer-nav a:hover, .footer-nav a:focus-visible { color: var(--white); }
@@ -318,6 +316,7 @@ footer { background: var(--black); border-top: 1px solid rgba(255,255,255,0.07);
 /* ─── RESPONSIVO ─── */
 @media (max-width: 900px) {
   header { padding: 0 20px; }
+  .logo-mark img { height: 26px; }
   nav[aria-label="Principal"] { display: none; }
   .hamburger { display: flex; }
   .hero-inner { grid-template-columns: 1fr; gap: 40px; padding: 40px 20px; }

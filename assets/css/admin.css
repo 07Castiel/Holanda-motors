@@ -10,8 +10,7 @@ body { background: var(--dark); }
 /* ── LOGIN ── */
 #loginScreen { position: fixed; inset: 0; z-index: 999; background: var(--black); display: flex; align-items: center; justify-content: center; padding: 20px; }
 .login-box { background: var(--dark2); border: 1px solid var(--border2); border-radius: 6px; padding: 48px 40px; width: 100%; max-width: 400px; text-align: center; }
-.login-logo .top { font-family: var(--font-d); font-weight: 900; font-size: 28px; letter-spacing: .18em; }
-.login-logo .sub { font-family: var(--font-d); font-weight: 300; font-size: 11px; letter-spacing: .52em; color: var(--gray); margin-top: 2px; }
+.login-logo img { display: block; margin: 0 auto; width: 200px; max-width: 100%; height: auto; }
 .login-badge { display: inline-block; margin: 20px 0 32px; font-size: 10px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; color: var(--red); border: 1px solid rgba(200,16,46,.3); padding: 4px 14px; border-radius: 20px; }
 .form-group { margin-bottom: 16px; text-align: left; }
 .form-group label { font-size: 11px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; color: var(--gray); display: block; margin-bottom: 8px; }
@@ -30,8 +29,7 @@ body { background: var(--dark); }
 #adminApp { min-height: 100vh; }
 .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: 240px; background: var(--black); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 50; transition: transform .3s; }
 .sidebar-logo { padding: 28px 24px 20px; border-bottom: 1px solid var(--border); }
-.sidebar-logo .top { font-family: var(--font-d); font-weight: 900; font-size: 20px; letter-spacing: .18em; }
-.sidebar-logo .sub { font-family: var(--font-d); font-weight: 300; font-size: 9px; letter-spacing: .52em; color: var(--gray); margin-top: 2px; }
+.sidebar-logo img { display: block; width: 160px; max-width: 100%; height: auto; }
 .sidebar-badge { font-size: 9px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; color: var(--red); margin-top: 8px; display: block; }
 .sidebar-nav { flex: 1; padding: 16px 0; overflow-y: auto; list-style: none; }
 .nav-section { font-size: 9px; font-weight: 700; letter-spacing: .25em; text-transform: uppercase; color: rgba(255,255,255,.25); padding: 16px 24px 8px; }
@@ -229,6 +227,7 @@ tbody td { padding: 14px 16px; font-size: 13px; vertical-align: middle; }
 .config-field input, .config-field textarea, .config-field select { width: 100%; background: var(--dark); border: 1px solid var(--border2); border-radius: 4px; color: var(--white); font-family: var(--font); font-size: 13px; padding: 10px 14px; outline: none; transition: .2s; }
 .config-field input:focus, .config-field textarea:focus { border-color: var(--red); }
 .config-field textarea { resize: vertical; min-height: 70px; }
+.config-hint { display: block; margin-top: 6px; font-size: 11px; line-height: 1.45; color: rgba(255,255,255,.38); }
 .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--border); gap: 16px; }
 .toggle-row:last-child { border-bottom: none; }
 .toggle-info h3 { font-size: 13px; font-weight: 600; margin-bottom: 2px; }

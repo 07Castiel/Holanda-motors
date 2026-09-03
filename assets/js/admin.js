@@ -1017,6 +1017,7 @@
     document.getElementById('cfg-name').value = cfg.name;
     document.getElementById('cfg-address').value = cfg.address;
     document.getElementById('cfg-wpp').value = cfg.wpp;
+    document.getElementById('cfg-wpp-vendas').value = cfg.wppVendas;
     document.getElementById('cfg-insta').value = cfg.insta;
     document.getElementById('cfg-h1').value = cfg.h1;
     document.getElementById('cfg-h2').value = cfg.h2;
@@ -1036,6 +1037,7 @@
       name: document.getElementById('cfg-name').value.trim(),
       address: document.getElementById('cfg-address').value.trim(),
       wpp: document.getElementById('cfg-wpp').value.replace(/\D/g, ''),
+      wppVendas: document.getElementById('cfg-wpp-vendas').value.replace(/\D/g, ''),
       insta: document.getElementById('cfg-insta').value.trim(),
       h1: document.getElementById('cfg-h1').value.trim(),
       h2: document.getElementById('cfg-h2').value.trim(),
