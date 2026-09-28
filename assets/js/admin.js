@@ -24,6 +24,7 @@
   const ICON_DEL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6m4-6v6"/><path d="M9 6V4h6v2"/></svg>';
   const ICON_TAG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20.59 13.41L11 3.83A2 2 0 009.59 3.24L4 3a1 1 0 00-1 1l.24 5.59a2 2 0 00.59 1.41l9.58 9.58a2 2 0 002.83 0l4.35-4.35a2 2 0 000-2.82z"/><circle cx="8" cy="8" r="1.5"/></svg>';
   const ICON_BOOKMARK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>';
+  const ICON_LINK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 13a5 5 0 007.07 0l2.83-2.83a5 5 0 00-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 00-7.07 0L4.1 13.83a5 5 0 007.07 7.07l1.5-1.5"/></svg>';
   const ICON_EYE_SMALL = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="vertical-align:-2px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
   const ICON_WPP_SMALL = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>';
 
@@ -156,6 +157,7 @@
       if (el.id.startsWith('cfg-')) el.disabled = !podeConfig;
     });
     document.getElementById('backupSection').hidden = !podeConfig;
+    document.getElementById('perfCard').hidden = !podeConfig;
   }
 
   /* ── NAVEGAÇÃO ── */
@@ -230,6 +232,62 @@
     document.getElementById('mostViewedList').innerHTML = maisVistos.length
       ? maisVistos.map(m => `<li class="most-viewed-item"><span class="most-viewed-name">${escapeHtml(m.nome)}</span><span class="most-viewed-count">${m.visualizacoes} visualizaç${m.visualizacoes === 1 ? 'ão' : 'ões'}</span></li>`).join('')
       : '<li class="most-viewed-item"><span style="color:var(--gray)">Ainda sem visualizações registradas.</span></li>';
+
+    if (roleAtLeast('gerente')) loadDesempenho();
+  }
+
+  /* ── DESEMPENHO DO SITE (visitas, origem, cliques em WhatsApp) — card visível só para gerente/administrador ── */
+  const ORIGEM_LABELS = { instagram: 'Instagram', google: 'Google', facebook: 'Facebook', whatsapp: 'WhatsApp', direto: 'Direto', outro: 'Outro' };
+  const LOCAL_LABELS = { header: 'Cabeçalho', flutuante: 'Botão flutuante', contato: 'Contato', contato_vendas: 'Contato (vendas)', consignacao: 'Consignação', card: 'Card do catálogo', modal: 'Modal de detalhes', pagina_veiculo: 'Página do veículo' };
+
+  document.getElementById('perfPeriodo').addEventListener('change', () => loadDesempenho());
+
+  async function loadDesempenho() {
+    const dias = Number(document.getElementById('perfPeriodo').value) || 30;
+    const body = document.getElementById('perfBody');
+    body.style.opacity = '0.5';
+    let r;
+    try {
+      r = await HM.getResumoDesempenho(dias);
+    } catch (err) {
+      console.error('[admin] Falha ao carregar o desempenho do site.', err);
+      document.getElementById('perfStats').innerHTML = '<p style="color:var(--gray)">Não foi possível carregar o desempenho do site.</p>';
+      document.getElementById('perfOrigemBody').innerHTML = '';
+      document.getElementById('perfLocalBody').innerHTML = '';
+      document.getElementById('perfTopVeiculosBody').innerHTML = '';
+      body.style.opacity = '';
+      return;
+    }
+    body.style.opacity = '';
+
+    const taxa = r.total_visitas ? Math.round((r.total_cliques_whatsapp / r.total_visitas) * 100) : 0;
+    document.getElementById('perfStats').innerHTML = `
+      <div class="stat-card blue"><div class="stat-card-label">Visitas</div><div class="stat-card-val">${r.total_visitas}</div><div class="stat-card-sub">últimos ${r.periodo_dias} dias</div></div>
+      <div class="stat-card green"><div class="stat-card-label">Cliques no WhatsApp</div><div class="stat-card-val">${r.total_cliques_whatsapp}</div><div class="stat-card-sub">últimos ${r.periodo_dias} dias</div></div>
+      <div class="stat-card yellow"><div class="stat-card-label">Taxa de clique</div><div class="stat-card-val">${taxa}%</div><div class="stat-card-sub">cliques ÷ visitas</div></div>
+    `;
+
+    document.getElementById('perfOrigemBody').innerHTML = r.por_origem.length
+      ? r.por_origem.map(o => `<tr><td>${escapeHtml(ORIGEM_LABELS[o.origem] || o.origem)}</td><td>${o.visitas}</td><td>${o.cliques}</td></tr>`).join('')
+      : `<tr><td colspan="3"><div class="empty-state"><p>Sem dados no período.</p></div></td></tr>`;
+
+    document.getElementById('perfLocalBody').innerHTML = r.cliques_por_local.length
+      ? r.cliques_por_local.map(l => `<tr><td>${escapeHtml(LOCAL_LABELS[l.local] || l.local)}</td><td>${l.cliques}</td></tr>`).join('')
+      : `<tr><td colspan="2"><div class="empty-state"><p>Sem cliques no período.</p></div></td></tr>`;
+
+    // Junta "top por páginas vistas" e "top por cliques" numa única tabela,
+    // por veículo — evita duas tabelas quase idênticas lado a lado.
+    const porVeiculo = new Map();
+    r.top_paginas.forEach(v => porVeiculo.set(v.veiculo_id, { ...v, paginas: v.paginas, cliques: 0 }));
+    r.top_cliques.forEach(v => {
+      const atual = porVeiculo.get(v.veiculo_id) || { ...v, paginas: 0, cliques: 0 };
+      atual.cliques = v.cliques;
+      porVeiculo.set(v.veiculo_id, atual);
+    });
+    const topVeiculos = Array.from(porVeiculo.values()).sort((a, b) => (b.paginas + b.cliques) - (a.paginas + a.cliques));
+    document.getElementById('perfTopVeiculosBody').innerHTML = topVeiculos.length
+      ? topVeiculos.map(v => `<tr><td>${escapeHtml(v.marca || '')} ${escapeHtml(v.modelo || '')}</td><td>${v.paginas || 0}</td><td>${v.cliques || 0}</td></tr>`).join('')
+      : `<tr><td colspan="3"><div class="empty-state"><p>Sem visitas por veículo no período.</p></div></td></tr>`;
   }
 
   /* ── TABELA DE VEÍCULOS (paginada + busca instantânea) ── */
@@ -491,6 +549,7 @@
         <td>
           <div class="actions">
             <button class="btn-icon toggle" type="button" data-toggle="${v.id}" ${v.vendido ? 'disabled' : ''} aria-label="${v.ativo ? 'Ocultar do site' : 'Exibir no site'}">${v.ativo ? ICON_EYE_OFF : ICON_EYE}</button>
+            <button class="btn-icon" type="button" data-copylink="${v.id}" aria-label="Copiar link público de ${escapeHtml(v.make)} ${escapeHtml(v.model)}" title="Copiar link público">${ICON_LINK}</button>
             ${podeExcluir ? `<button class="btn-icon del" type="button" data-del="${v.id}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="Excluir ${escapeHtml(v.make)} ${escapeHtml(v.model)}">${ICON_DEL}</button>` : ''}
             <button class="btn-icon reserve ${v.reservado ? 'is-active' : ''}" type="button" data-reserve="${v.id}" data-reservado="${v.reservado ? '1' : '0'}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" ${v.vendido ? 'disabled' : ''} aria-label="${v.reservado ? 'Remover reserva' : 'Marcar como reservado'}">${ICON_BOOKMARK}</button>
             <button class="btn-icon sold" type="button" data-sold="${v.id}" data-vendido="${v.vendido ? '1' : '0'}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="${v.vendido ? 'Reverter para disponível' : 'Marcar como vendido'}">${ICON_TAG}</button>
@@ -508,6 +567,10 @@
     } else {
       tbody.innerHTML = vs.map(v => vehicleRowHtml(v, vehicleState.interesse[v.id])).join('');
       tbody.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', () => toggleVisible(b.dataset.toggle)));
+      tbody.querySelectorAll('[data-copylink]').forEach(b => b.addEventListener('click', () => {
+        const v = vehicleState.rows.find(x => x.id === b.dataset.copylink);
+        if (v) copyLinkPublico(v);
+      }));
       tbody.querySelectorAll('[data-reserve]').forEach(b => b.addEventListener('click', () => markReserved(b.dataset.reserve, b.dataset.label, b.dataset.reservado === '1')));
       tbody.querySelectorAll('[data-sold]').forEach(b => b.addEventListener('click', () => markSold(b.dataset.sold, b.dataset.label, b.dataset.vendido === '1')));
       tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openVehicleModal(b.dataset.edit, b)));
@@ -515,6 +578,17 @@
     }
     document.getElementById('vehicleListCount').textContent = vs.length ? `Mostrando ${vs.length} de ${vehicleState.total}` : '';
     document.getElementById('vehicleLoadMoreBtn').hidden = vs.length >= vehicleState.total;
+  }
+
+  /** Copia o link público do veículo (HM.linkPublico) — usado tanto pelo botão da lista quanto pelo do modal de edição, pros vendedores colarem no Instagram e no WhatsApp. */
+  async function copyLinkPublico(v) {
+    try {
+      await navigator.clipboard.writeText(HM.linkPublico(v));
+      toast('Link público copiado!', 'success');
+    } catch (err) {
+      console.error('[admin] Falha ao copiar link público.', err);
+      toast('Não foi possível copiar o link.', 'error');
+    }
   }
 
   async function toggleVisible(id) {
@@ -604,7 +678,13 @@
       soldBtn.textContent = v.vendido ? 'Reverter venda' : 'Marcar como vendido';
       soldBtn.onclick = () => markSold(v.id, `${v.make} ${v.model}`, v.vendido).then(closeVehicleModal);
 
+      const copyLinkBtn = document.getElementById('vehicleCopyLinkBtn');
+      copyLinkBtn.hidden = false;
+      copyLinkBtn.onclick = () => copyLinkPublico(v);
+
       loadVehicleHistory(v.id);
+    } else {
+      document.getElementById('vehicleCopyLinkBtn').hidden = true;
     }
     openModal(vehicleOverlay, document.getElementById('vMake'));
   }

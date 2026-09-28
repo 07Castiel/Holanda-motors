@@ -961,3 +961,213 @@ alter table configuracoes_loja add column if not exists whatsapp_vendas text not
 update configuracoes_loja
   set whatsapp_vendas = '5588921449902'
   where coalesce(whatsapp_vendas, '') = '';
+
+-- ============================================================================
+-- PARTE 13 — Página própria por veículo (slug) e medição de desempenho do site
+-- ----------------------------------------------------------------------------
+-- Duas frentes, sem relação entre si além de nascerem da mesma tarefa:
+--
+-- 1) "slug" em veiculos: identificador legível (ex: toyota-corolla-xei-2021)
+--    usado pela rota /veiculo/<slug> (função da Vercel, fora deste banco).
+--    Gerado automaticamente e NUNCA regenerado depois de existir — links já
+--    compartilhados (WhatsApp, Instagram, Google) não podem quebrar quando o
+--    gestor editar o modelo/ano depois.
+--
+-- 2) "eventos_site" + RPC "resumo_desempenho": medição própria de visitas,
+--    origem (Instagram/Google/direto/...) e cliques em WhatsApp, sem cookies
+--    e sem nenhum dado pessoal (não guarda IP nem user agent) — por isso não
+--    precisa de banner de consentimento. Complementa "interacoes_veiculo"
+--    (Parte 5), que já existia e continua alimentando o painel como antes;
+--    esta tabela nova mede o site como um todo, não só por veículo.
+--
+-- Idempotente como o resto do arquivo.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 13a) SLUG — gerado uma vez, nunca regenerado
+-- ----------------------------------------------------------------------------
+
+alter table veiculos add column if not exists slug text;
+
+create unique index if not exists idx_veiculos_slug on veiculos (slug) where slug is not null;
+
+-- unaccent (remove acentos) fica em "extensions", junto com pg_trgm (Parte 6).
+create extension if not exists unaccent schema extensions;
+
+-- SECURITY INVOKER: só lê marcas/veiculos, tabelas que quem grava um veículo
+-- (autenticado) já pode ler — não precisa elevar privilégio. search_path
+-- fixo mesmo assim, pela mesma razão das funções SECURITY DEFINER do resto
+-- do arquivo (mitigar sequestro de resolução de nomes).
+create or replace function public.gerar_slug_veiculo()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public, extensions
+as $$
+declare
+  marca_nome text;
+  base text;
+  candidato text;
+  tentativa int := 0;
+begin
+  -- Só preenche quando o slug estiver vazio — nunca regenera um já existente,
+  -- para os links antigos não quebrarem quando o gestor editar o veículo.
+  if new.slug is not null and btrim(new.slug) <> '' then
+    return new;
+  end if;
+
+  select nome into marca_nome from marcas where id = new.marca_id;
+
+  base := lower(unaccent(coalesce(marca_nome, '') || '-' || coalesce(new.modelo, '') || '-' || coalesce(new.ano::text, '')));
+  base := regexp_replace(base, '[^a-z0-9]+', '-', 'g');
+  base := regexp_replace(base, '-+', '-', 'g');
+  base := trim(both '-' from base);
+  if base = '' then
+    base := 'veiculo';
+  end if;
+
+  candidato := base;
+  while exists (select 1 from veiculos where slug = candidato and id <> new.id) loop
+    tentativa := tentativa + 1;
+    if tentativa = 1 then
+      -- Primeira colisão: sufixo estável a partir dos 4 primeiros caracteres
+      -- do próprio id, como pedido — dá pra reproduzir/depurar depois.
+      candidato := base || '-' || substr(replace(new.id::text, '-', ''), 1, 4);
+    else
+      -- Colisão do sufixo do id também (raríssimo) — cai para algo aleatório.
+      candidato := base || '-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 4);
+    end if;
+  end loop;
+
+  new.slug := candidato;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_gerar_slug_veiculo on veiculos;
+create trigger trg_gerar_slug_veiculo
+  before insert or update on veiculos
+  for each row execute function public.gerar_slug_veiculo();
+
+-- Backfill: toca "slug" sem mudar seu valor (permanece null) só para disparar
+-- o trigger BEFORE UPDATE acima em cada veículo já cadastrado.
+update veiculos set slug = slug where slug is null;
+
+-- ----------------------------------------------------------------------------
+-- 13b) EVENTOS_SITE — medição de visitas/origem/WhatsApp, sem cookies e sem
+-- dado pessoal (não guarda IP nem user agent completo). RLS: insert público
+-- (o site é anônimo, mesmo padrão de interacoes_veiculo na Parte 5), leitura
+-- só para gerente/administrador (mesmo padrão de logs_acoes na Parte 2).
+-- ----------------------------------------------------------------------------
+
+create table if not exists eventos_site (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  tipo text not null check (tipo in ('sessao', 'pagina', 'whatsapp')),
+  pagina text check (pagina is null or char_length(pagina) <= 200),
+  veiculo_id uuid references veiculos (id) on delete set null,
+  local text check (local is null or char_length(local) <= 40),
+  origem text not null check (origem in ('instagram', 'google', 'facebook', 'whatsapp', 'direto', 'outro')),
+  utm_source text check (utm_source is null or char_length(utm_source) <= 100),
+  utm_medium text check (utm_medium is null or char_length(utm_medium) <= 100),
+  utm_campaign text check (utm_campaign is null or char_length(utm_campaign) <= 100),
+  dispositivo text not null check (dispositivo in ('mobile', 'desktop'))
+);
+
+create index if not exists idx_eventos_site_tipo_created on eventos_site (tipo, created_at desc);
+create index if not exists idx_eventos_site_veiculo on eventos_site (veiculo_id);
+
+alter table eventos_site enable row level security;
+
+drop policy if exists "eventos_site_insert_public" on eventos_site;
+create policy "eventos_site_insert_public" on eventos_site for insert
+  with check (
+    tipo in ('sessao', 'pagina', 'whatsapp')
+    and origem in ('instagram', 'google', 'facebook', 'whatsapp', 'direto', 'outro')
+    and dispositivo in ('mobile', 'desktop')
+    and (pagina is null or char_length(pagina) <= 200)
+    and (local is null or char_length(local) <= 40)
+    and (utm_source is null or char_length(utm_source) <= 100)
+    and (utm_medium is null or char_length(utm_medium) <= 100)
+    and (utm_campaign is null or char_length(utm_campaign) <= 100)
+  );
+
+drop policy if exists "eventos_site_select_auth" on eventos_site;
+create policy "eventos_site_select_auth" on eventos_site for select
+  using ((select public.current_user_role()) in ('administrador', 'gerente'));
+
+-- ----------------------------------------------------------------------------
+-- 13c) RPC resumo_desempenho — agrega tudo no SQL (o PostgREST corta
+-- respostas em 1000 linhas, então agregar no cliente sub-contaria qualquer
+-- loja com mais eventos que isso). SECURITY INVOKER de propósito: a política
+-- de select acima já restringe a leitura a gerente/administrador — um
+-- vendedor autenticado que chamar esta função recebe zeros, não erro, sem
+-- precisar duplicar a checagem de papel aqui dentro.
+-- ----------------------------------------------------------------------------
+
+create or replace function public.resumo_desempenho(p_dias int default 30)
+returns json
+language sql
+security invoker
+stable
+set search_path = public
+as $$
+  with janela as (
+    select now() - (greatest(p_dias, 1) || ' days')::interval as desde
+  ),
+  origem_stats as (
+    select
+      e.origem,
+      count(*) filter (where e.tipo = 'sessao') as visitas,
+      count(*) filter (where e.tipo = 'whatsapp') as cliques
+    from eventos_site e, janela
+    where e.created_at >= janela.desde and e.tipo in ('sessao', 'whatsapp')
+    group by e.origem
+  ),
+  local_stats as (
+    select e.local, count(*) as cliques
+    from eventos_site e, janela
+    where e.tipo = 'whatsapp' and e.created_at >= janela.desde and e.local is not null
+    group by e.local
+    order by count(*) desc
+  ),
+  top_paginas as (
+    select e.veiculo_id, v.modelo, m.nome as marca, v.slug, count(*) as paginas
+    from eventos_site e, janela
+    join veiculos v on v.id = e.veiculo_id
+    left join marcas m on m.id = v.marca_id
+    where e.tipo = 'pagina' and e.created_at >= janela.desde and e.veiculo_id is not null
+    group by e.veiculo_id, v.modelo, m.nome, v.slug
+    order by count(*) desc
+    limit 10
+  ),
+  top_cliques as (
+    select e.veiculo_id, v.modelo, m.nome as marca, v.slug, count(*) as cliques
+    from eventos_site e, janela
+    join veiculos v on v.id = e.veiculo_id
+    left join marcas m on m.id = v.marca_id
+    where e.tipo = 'whatsapp' and e.created_at >= janela.desde and e.veiculo_id is not null
+    group by e.veiculo_id, v.modelo, m.nome, v.slug
+    order by count(*) desc
+    limit 10
+  ),
+  visitas_dia as (
+    select date_trunc('day', e.created_at)::date as dia, count(*) as visitas
+    from eventos_site e, janela
+    where e.tipo = 'sessao' and e.created_at >= janela.desde
+    group by dia
+    order by dia
+  )
+  select json_build_object(
+    'periodo_dias', p_dias,
+    'total_visitas', (select count(*) from eventos_site e, janela where e.tipo = 'sessao' and e.created_at >= janela.desde),
+    'total_cliques_whatsapp', (select count(*) from eventos_site e, janela where e.tipo = 'whatsapp' and e.created_at >= janela.desde),
+    'por_origem', coalesce((select json_agg(row_to_json(o)) from origem_stats o), '[]'::json),
+    'cliques_por_local', coalesce((select json_agg(row_to_json(l)) from local_stats l), '[]'::json),
+    'top_paginas', coalesce((select json_agg(row_to_json(tp)) from top_paginas tp), '[]'::json),
+    'top_cliques', coalesce((select json_agg(row_to_json(tc)) from top_cliques tc), '[]'::json),
+    'visitas_por_dia', coalesce((select json_agg(row_to_json(vd)) from visitas_dia vd), '[]'::json)
+  );
+$$;
+
+grant execute on function public.resumo_desempenho(int) to authenticated;

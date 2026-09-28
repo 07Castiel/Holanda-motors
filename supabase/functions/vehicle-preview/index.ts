@@ -1,22 +1,21 @@
 // supabase/functions/vehicle-preview/index.ts
 //
-// Gera uma página com tags Open Graph/Twitter Card específicas de um
-// veículo (foto, título, preço) para rastreadores que NÃO executam
-// JavaScript (WhatsApp, Instagram, Facebook, Telegram...). O site em si
-// (index.html) é 100% client-side — os dados só existem depois que o JS
-// roda — então esses rastreadores nunca veriam o preview certo se
-// apontassem direto pra lá.
+// Links antigos: antes das páginas próprias por veículo (api/veiculo.js, no
+// domínio da loja), o botão "Copiar link" do site apontava pra esta Edge
+// Function, que ainda pode estar em posts/mensagens já enviados por aí. Ela
+// não gera mais o preview em si — só redireciona quem clicar num link antigo
+// pra página nova (/veiculo/<slug>, ou ?veiculo=<id> se o veículo ainda não
+// tiver slug). Ver README → "Preview ao compartilhar" para o histórico.
 //
-// Um visitante de verdade (navegador) é redirecionado quase
-// instantaneamente para o site real via <meta http-equiv="refresh"> + um
-// fallback em JS. Rastreadores só leem o <head> e param por aí — é por
-// isso que funciona sem precisar identificar quem é rastreador e quem é
-// gente (nenhum dos dois lados precisa de tratamento especial).
+// Continua servindo um preview OG/Twitter Card básico durante o brevíssimo
+// instante do redirect, pro caso de algum rastreador ler esta página em vez
+// de seguir o redirect — mas quem faz esse trabalho de verdade agora é
+// api/veiculo.js, que roda no próprio domínio da loja.
 //
 // Rota pública, sem verificação de JWT (verify_jwt=false no deploy) —
-// precisa ser alcançável por qualquer rastreador/visitante sem login, e
-// só devolve dados de veículos que já são públicos no site (mesma regra
-// de RLS: ativo=true e vendido=false).
+// precisa ser alcançável por qualquer rastreador/visitante sem login, e só
+// devolve dados de veículos que já são públicos no site (mesma regra de
+// RLS: ativo=true e vendido=false).
 //
 // URL: https://<project>.supabase.co/functions/v1/vehicle-preview/<id>
 
@@ -24,8 +23,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const SUPABASE_URL = 'https://bqtfnnglwampyijmwdgm.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_vaitarKonQCntB4mmzltLg_UMYpWaV3';
-const SITE_URL = 'https://07castiel.github.io/Holanda-motors/';
-const DEFAULT_IMAGE = SITE_URL + 'fachada.PNG';
+const SITE_URL = 'https://www.holandamotors.com.br/';
+const DEFAULT_IMAGE = SITE_URL + 'assets/img/og-holanda.jpg';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -88,13 +87,16 @@ Deno.serve(async (req: Request) => {
 
   const { data: veiculo } = await supabase
     .from('veiculos')
-    .select('modelo, ano, km, cambio, preco, marcas(nome), midias_veiculo(url, principal)')
+    .select('modelo, ano, km, cambio, preco, slug, marcas(nome), midias_veiculo(url, principal)')
     .eq('id', id)
     .eq('ativo', true)
     .eq('vendido', false)
     .maybeSingle();
 
-  const redirectTo = `${SITE_URL}?veiculo=${encodeURIComponent(id)}`;
+  // Com slug (veículo já migrado): manda pra página própria no domínio da
+  // loja. Sem slug (ainda não rodou o backfill): cai no link antigo, que o
+  // site público continua sabendo abrir (?veiculo=<id>).
+  const redirectTo = veiculo?.slug ? `${SITE_URL}veiculo/${veiculo.slug}` : `${SITE_URL}?veiculo=${encodeURIComponent(id)}`;
 
   if (!veiculo) {
     // Veículo não existe, foi vendido ou ocultado — manda pro estoque geral
