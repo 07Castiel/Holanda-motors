@@ -16,6 +16,8 @@ Site institucional e painel administrativo para a **Holanda Motors**, concession
 - [Como executar o projeto localmente](#como-executar-o-projeto-localmente)
 - [Migrando dados antigos do localStorage](#migrando-dados-antigos-do-localstorage)
 - [Como funcionam os arquivos principais](#como-funcionam-os-arquivos-principais)
+- [Páginas de veículo e SEO](#páginas-de-veículo-e-seo)
+- [Medição de desempenho](#medição-de-desempenho)
 - [Preview ao compartilhar (Edge Function)](#preview-ao-compartilhar-edge-function)
 - [Publicando no GitHub Pages](#publicando-no-github-pages)
 - [Como adicionar novos administradores](#como-adicionar-novos-administradores)
@@ -43,6 +45,7 @@ O painel também traz: upload de várias fotos por veículo (com compactação a
 - **CSS3** puro (sem frameworks) — variáveis nativas, Grid e Flexbox
 - **JavaScript** vanilla (ES6+, assíncrono), sem bundler — o SDK do Supabase é carregado via CDN
 - **[Supabase](https://supabase.com)**: Postgres (banco), Auth (login do painel) e Storage (fotos dos veículos)
+- **[Vercel](https://vercel.com)**: hospedagem (domínio `www.holandamotors.com.br`) e duas funções serverless em Node, sem dependências (`api/veiculo.js`, `api/sitemap.js`) — ver [Páginas de veículo e SEO](#páginas-de-veículo-e-seo)
 - **Google Fonts** (Barlow / Barlow Condensed)
 
 Não há etapa de build, bundler ou transpilação — os arquivos rodam exatamente como estão, direto no navegador. Isso é intencional para manter a compatibilidade com o GitHub Pages.
@@ -56,23 +59,30 @@ holanda-motors/
 ├── admin/
 │   └── index.html                # Painel do gestor (URL final: /admin/)
 ├── migrar-localstorage.html      # Ferramenta temporária de migração, idempotente (ver seção própria) — apague após o uso
+├── robots.txt                    # Libera o site, bloqueia /admin/ e a migração, aponta pro sitemap
+├── vercel.json                   # Rewrites (/veiculo/:slug, /sitemap.xml) e otimização de imagem
 ├── README.md
 ├── .nojekyll                     # Evita processamento Jekyll no GitHub Pages
+├── api/
+│   ├── veiculo.js                # Função da Vercel: página própria de cada veículo (ver "Páginas de veículo e SEO")
+│   └── sitemap.js                # Função da Vercel: /sitemap.xml
 ├── supabase/
 │   ├── schema.sql                # Script único: tabelas, RLS, Storage e dados iniciais
 │   └── functions/
 │       └── vehicle-preview/
-│           └── index.ts          # Edge Function: preview por veículo ao compartilhar (ver seção própria)
+│           └── index.ts          # Edge Function: redireciona links antigos (ver seção própria)
 └── assets/
     ├── css/
     │   ├── base.css               # Variáveis, reset, botões e badges compartilhados
     │   ├── site.css                # Estilos exclusivos do site público
+    │   ├── veiculo.css               # Só o que falta na página de veículo além de base.css/site.css
     │   └── admin.css                 # Estilos exclusivos do painel do gestor
     └── js/
         ├── supabase-client.js         # Instância única do client Supabase (URL + chave anon)
         ├── data.js                     # Camada de dados compartilhada — fonte única de verdade
-        ├── site.js                      # Lógica do site público
-        └── admin.js                      # Lógica do painel do gestor
+        ├── rastreio.js                  # Medição de visitas/origem/WhatsApp (ver "Medição de desempenho")
+        ├── site.js                       # Lógica do site público
+        └── admin.js                       # Lógica do painel do gestor
 ```
 
 ## Modelo de dados
@@ -89,7 +99,8 @@ Tabelas criadas por `supabase/schema.sql`:
 | `configuracoes_loja` | Linha única com os dados da loja (endereço, WhatsApp, horários, textos, preferências de exibição do site). |
 | `logs_acoes` | Trilha de auditoria — toda ação de escrita do painel gera uma linha aqui (quem, o quê, quando). É a fonte tanto do feed "Atividade recente" do dashboard quanto do histórico por veículo e da tela de Logs. Somente leitura depois de gravada (sem política de update/delete). |
 | `usuarios` | Perfil de cada administrador (nome, e-mail, **nível de acesso**), vinculada 1:1 ao usuário do Supabase Auth. A senha em si nunca fica nesta tabela. Preenchida automaticamente por um gatilho quando um usuário é criado no Auth — veja [Níveis de acesso](#níveis-de-acesso). |
-| `interacoes_veiculo` | Um evento por "visualização" (abriu o modal de detalhes) ou clique em WhatsApp — alimenta a coluna "Interesse" na tabela de veículos e o "Mais vistos" do dashboard. **Único caso de tabela com INSERT público** no projeto (o site é anônimo); a leitura continua restrita a quem está autenticado, então nenhum visitante vê os números de ninguém. Sem limitação de taxa — ver [Limitações conhecidas](#limitações-conhecidas). |
+| `interacoes_veiculo` | Um evento por "visualização" (abriu o modal de detalhes) ou clique em WhatsApp — alimenta a coluna "Interesse" na tabela de veículos e o "Mais vistos" do dashboard. Insert público (o site é anônimo); a leitura continua restrita a quem está autenticado, então nenhum visitante vê os números de ninguém. Sem limitação de taxa — ver [Limitações conhecidas](#limitações-conhecidas). |
+| `eventos_site` | Medição de tráfego do site (visitas, origem, cliques em WhatsApp) — ver [Medição de desempenho](#medição-de-desempenho). Também com insert público e leitura restrita (só gerente/administrador, e sem nenhum dado pessoal). |
 
 A tabela `atividades` da primeira versão da migração ainda existe no banco (por compatibilidade, nada foi apagado), mas não é mais usada — foi substituída por `logs_acoes`, que registra a mesma informação de forma estruturada e com autoria.
 
@@ -179,23 +190,56 @@ Cada card e o modal também mostram uma simulação de parcelamento ("a partir d
 6. **Logs** — visível para gerentes/administradores: trilha completa de ações no painel, com filtro por área.
 7. **Configurações** — dados da loja, preferências de exibição do site, troca de senha, e a seção de backup/restauração (ver [Backup e restauração](#backup-e-restauração)) — essas duas últimas exigem nível gerente ou administrador.
 
+## Páginas de veículo e SEO
+
+Antes, o site inteiro era uma página só (`index.html`) — o Google via um card genérico, nunca um veículo específico, e cada anúncio não tinha um endereço próprio pra indexar ou mandar no WhatsApp. Isso mudou com uma página própria por veículo, servida por uma função da Vercel (não pelo `index.html`, que continua 100% client-side).
+
+- **Rota:** `/veiculo/<slug>` — configurada em [`vercel.json`](vercel.json) como um rewrite pra `/api/veiculo?slug=<slug>`.
+- **Função:** [`api/veiculo.js`](api/veiculo.js). Roda em Node, sem dependências (usa o `fetch` nativo direto contra o REST do Supabase, com a mesma URL/chave `anon` públicas do front, lidas de `process.env.SUPABASE_URL`/`SUPABASE_ANON_KEY` com fallback pros valores fixos). Monta uma página lida sem JavaScript: título, meta description, `canonical`, Open Graph/Twitter Card com a foto principal, dados estruturados (`Car`/`Motorcycle`, JSON-LD) e o corpo com galeria, especificações, preço e os botões de WhatsApp/estoque.
+  - Um parâmetro no formato UUID (link antigo, com `?veiculo=<id>`) é resolvido pelo id e redireciona **301** pro slug.
+  - Veículo inexistente, vendido ou oculto (RLS já filtra isso) devolve **404** com `noindex`.
+  - Resposta com `Cache-Control: public, s-maxage=300, stale-while-revalidate=600`.
+- **Slug:** coluna `veiculos.slug`, gerada por um trigger no banco (`supabase/schema.sql` → PARTE 13) no formato `marca-modelo-ano` (sem acentos, minúsculo, colisões resolvidas com um sufixo). **Gerado só quando está vazio — nunca é regenerado** depois de existir, mesmo que o gestor edite marca/modelo/ano do veículo mais tarde. Isso é proposital: um link já compartilhado no Instagram ou indexado pelo Google não pode virar 404 só porque o anúncio foi atualizado.
+- **Sitemap:** [`api/sitemap.js`](api/sitemap.js), servido em `/sitemap.xml` (rewrite no `vercel.json`) — lista a home e cada veículo com slug, com `lastmod`.
+- **`robots.txt`** na raiz libera tudo, exceto `/admin/`, `/admin.html` e `/migrar-localstorage.html`, e aponta pro sitemap.
+- **CSS:** [`assets/css/veiculo.css`](assets/css/veiculo.css) tem só o que falta além de `base.css`/`site.css` (layout da página, galeria, breadcrumb) — header, footer, botões e o bloco de especificações são os mesmos estilos do site público.
+- **Link público:** `HM.linkPublico(v)` (`assets/js/data.js`) monta a URL `https://www.holandamotors.com.br/veiculo/<slug>`, com fallback pro link antigo (`/?veiculo=<id>`) se o veículo ainda não tiver slug. É o que o botão "Copiar link" do site e do painel usam, e o que os cards do catálogo apontam (Ctrl/Cmd/clique do meio abre a página própria numa aba nova; um clique normal continua abrindo o modal, que é mais rápido pra quem já está navegando).
+
+## Medição de desempenho
+
+Medição própria de tráfego — sem Google Analytics, sem pixel de terceiro e **sem cookies**: não guarda IP nem *user agent*, só o necessário pra contar visitas, de onde vieram e quantas viraram clique em WhatsApp. Por não usar cookies nem identificar pessoas, não precisa de banner de consentimento.
+
+- **Tabela:** `eventos_site` (`supabase/schema.sql` → PARTE 13) — um evento por tipo (`sessao`, `pagina`, `whatsapp`), com origem, dispositivo e, quando aplicável, UTM e o veículo relacionado. Insert público (o site é anônimo), leitura restrita a gerente/administrador.
+- **Coleta:** [`assets/js/rastreio.js`](assets/js/rastreio.js), carregado tanto na home quanto na página de veículo — **sem depender do supabase-js**, fala direto com o REST via `fetch`. Auto-inicializa sozinho ao carregar (a página de veículo só precisa do `<body data-veiculo-id="...">`, que `api/veiculo.js` já gera):
+  - **Origem** é calculada uma vez por sessão (via `utm_source`, ou o `document.referrer`) e fica em `sessionStorage` — navegar para outra página do próprio site não recalcula.
+  - **Sessão:** um evento por sessão, no primeiro carregamento.
+  - **Página:** um evento por caminho por sessão (reabrir o modal do mesmo veículo não conta de novo — isso já é o que `interacoes_veiculo` faz).
+  - **WhatsApp:** um listener delegado em `a[href^="https://wa.me/"]`, usando `data-wpp-local` (`header`, `flutuante`, `contato`, `contato_vendas`, `consignacao`, `card`, `modal`, `pagina_veiculo`) pra saber onde foi o clique.
+  - Nunca lança erro pro chamador — uma falha de rede aqui não pode quebrar a navegação de quem só está olhando o site.
+- **`interacoes_veiculo`** (contador de "interesse" por veículo, já existente) continua funcionando exatamente como antes na home; a página de veículo grava nela também (visualização ao carregar, clique no botão principal), pros números do painel baterem nos dois lugares.
+- **RPC `resumo_desempenho(p_dias)`:** agrega tudo no SQL (o PostgREST corta respostas em 1000 linhas — agregar no cliente sub-contaria qualquer loja com mais eventos que isso) e devolve visitas, cliques em WhatsApp, por origem, por local do clique e os top 10 veículos. Alimenta o card **"Desempenho do site"** no dashboard do painel (visível só pra gerente/administrador), com seletor de período (7/30/90 dias).
+- **Convenção de UTM** pros links que a loja divulgar (pra aparecerem certos no card de origem):
+
+  | Onde o link é colocado | Link |
+  |---|---|
+  | Bio do Instagram | `https://www.holandamotors.com.br/?utm_source=instagram&utm_medium=bio` |
+  | Stories ou post de um veículo | `https://www.holandamotors.com.br/veiculo/<slug>?utm_source=instagram&utm_medium=stories` |
+  | Perfil da Empresa no Google | `https://www.holandamotors.com.br/?utm_source=google&utm_medium=perfil_empresa` |
+  | Anúncio Meta | `https://www.holandamotors.com.br/?utm_source=facebook&utm_medium=anuncio&utm_campaign=<nome>` |
+
 ## Preview ao compartilhar (Edge Function)
 
-O site é 100% estático e os dados dos veículos só existem depois que o JavaScript roda no navegador — mas rastreadores de preview de link (WhatsApp, Instagram, Telegram...) **não executam JavaScript**. Sem ajuda, compartilhar o link de um veículo específico mostraria só um card genérico do site inteiro, nunca a foto/preço daquele carro.
+Antes das páginas próprias por veículo (seção acima), o botão "Copiar link" do site apontava pra uma Edge Function no Supabase, que gerava um preview OG/Twitter Card e redirecionava pro site. Hoje quem faz esse trabalho é `api/veiculo.js`, rodando no próprio domínio da loja — a Edge Function [`supabase/functions/vehicle-preview/index.ts`](supabase/functions/vehicle-preview/index.ts) continua publicada só para **não quebrar links antigos** já compartilhados ou indexados:
 
-A solução é a Edge Function [`supabase/functions/vehicle-preview/index.ts`](supabase/functions/vehicle-preview/index.ts), publicada no seu próprio projeto Supabase:
-
-- O botão **"Copiar link"** no modal de detalhes copia a URL `https://SEU-PROJETO.supabase.co/functions/v1/vehicle-preview/<id>` em vez do link direto do site — é ela que garante o preview rico quando o link é colado no WhatsApp.
-- **As mensagens prontas de WhatsApp não levam essa URL.** Decisão do gestor: o texto termina em "gostaria de saber mais!", sem link. Quem quiser compartilhar o veículo com preview usa o "Copiar link".
-- Essa function busca o veículo no banco e devolve uma página HTML só com as tags Open Graph/Twitter Card certas (foto, título, preço) — é só isso que o rastreador lê.
-- Um visitante de verdade é redirecionado automaticamente (`<meta http-equiv="refresh">` + JavaScript) para o site real, em `index.html?veiculo=<id>`, quase instantaneamente.
+- Redireciona `https://SEU-PROJETO.supabase.co/functions/v1/vehicle-preview/<id>` para `/veiculo/<slug>` (ou `/?veiculo=<id>`, se o veículo ainda não tiver slug).
+- Continua servindo um preview OG/Twitter Card básico (com a foto/preço do veículo) durante o instante do redirect, caso algum rastreador o leia antes de seguir o link.
 - É pública (`verify_jwt` desativado no deploy) de propósito — precisa ser alcançável por qualquer rastreador ou visitante sem login, e só devolve dados de veículos já públicos no site (mesma regra de RLS: `ativo = true` e `vendido = false`).
 
 **Se você recriar o projeto Supabase do zero**, publique a function de novo (painel do Supabase → **Edge Functions** → **New function**, nome `vehicle-preview`, cole o conteúdo do arquivo, desmarque "Verify JWT" antes de publicar) ou via CLI:
 ```bash
 supabase functions deploy vehicle-preview --project-ref SEU-PROJETO --no-verify-jwt
 ```
-> O arquivo da function tem `SUPABASE_URL`, a chave `anon` e a URL do site (`SITE_URL`) fixas no topo — atualize os três se algum deles mudar.
+> O arquivo da function tem `SUPABASE_URL`, a chave `anon` e a URL do site (`SITE_URL`) fixas no topo — atualize os três se algum deles mudar (assim como `assets/js/supabase-client.js` e `assets/js/rastreio.js`, que mantêm a mesma cópia fixa pelo mesmo motivo).
 
 ## Publicando no GitHub Pages
 

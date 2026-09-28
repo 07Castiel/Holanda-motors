@@ -128,6 +128,54 @@
             <h2>Mais vistos</h2>
             <ol class="most-viewed-list" id="mostViewedList"></ol>
           </div>
+
+          <!-- Visível só para administrador/gerente (ver applyRolePermissions em admin.js) — alimentado pela RPC resumo_desempenho (supabase/schema.sql → PARTE 13). -->
+          <div class="dash-card" id="perfCard" style="grid-column:1/-1" hidden>
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px">
+              <h2 style="margin-bottom:0">Desempenho do site</h2>
+              <label class="sr-only" for="perfPeriodo">Período</label>
+              <select class="filter-select" id="perfPeriodo">
+                <option value="7">Últimos 7 dias</option>
+                <option value="30" selected>Últimos 30 dias</option>
+                <option value="90">Últimos 90 dias</option>
+              </select>
+            </div>
+            <div id="perfBody">
+              <div class="stats-row" id="perfStats"></div>
+              <div class="dash-grid" style="margin-top:20px">
+                <div class="dash-card">
+                  <h2>Visitas e cliques por origem</h2>
+                  <div class="table-wrap">
+                    <table>
+                      <caption class="sr-only">Visitas e cliques em WhatsApp por origem do tráfego</caption>
+                      <thead><tr><th scope="col">Origem</th><th scope="col">Visitas</th><th scope="col">Cliques WhatsApp</th></tr></thead>
+                      <tbody id="perfOrigemBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="dash-card">
+                  <h2>Cliques por local</h2>
+                  <div class="table-wrap">
+                    <table>
+                      <caption class="sr-only">Cliques em WhatsApp por local do botão</caption>
+                      <thead><tr><th scope="col">Local</th><th scope="col">Cliques</th></tr></thead>
+                      <tbody id="perfLocalBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="dash-card" style="grid-column:1/-1">
+                  <h2>Top veículos</h2>
+                  <div class="table-wrap">
+                    <table>
+                      <caption class="sr-only">Veículos com mais páginas vistas e cliques em WhatsApp</caption>
+                      <thead><tr><th scope="col">Veículo</th><th scope="col">Páginas vistas</th><th scope="col">Cliques WhatsApp</th></tr></thead>
+                      <tbody id="perfTopVeiculosBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -528,6 +576,7 @@
     </form>
     <div class="modal-footer">
       <button class="btn-secondary" id="vehicleSoldBtn" type="button" hidden></button>
+      <button class="btn-secondary" id="vehicleCopyLinkBtn" type="button" hidden>Copiar link público</button>
       <span style="flex:1"></span>
       <button class="btn-secondary" id="vehicleCancelBtn">Cancelar</button>
       <button class="btn-primary" id="vehicleSaveBtn">Salvar veículo</button>
@@ -592,7 +641,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.2"></script>
 <script src="../assets/js/supabase-client.js?v=4"></script>
-<script src="../assets/js/data.js?v=10"></script>
-<script src="../assets/js/admin.js?v=10"></script>
+<script src="../assets/js/data.js?v=11"></script>
+<script src="../assets/js/admin.js?v=11"></script>
 </body>
 </html>

@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    { "source": "/veiculo/:slug", "destination": "/api/veiculo?slug=:slug" },
+    { "source": "/sitemap.xml", "destination": "/api/sitemap" }
+  ],
+  "images": {
+    "remotePatterns": [
+      { "protocol": "https", "hostname": "bqtfnnglwampyijmwdgm.supabase.co" }
+    ],
+    "sizes": [640, 750, 828, 1080, 1200, 1920]
+  }
+}
