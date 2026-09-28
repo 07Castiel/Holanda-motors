@@ -1120,20 +1120,23 @@ as $$
       e.origem,
       count(*) filter (where e.tipo = 'sessao') as visitas,
       count(*) filter (where e.tipo = 'whatsapp') as cliques
-    from eventos_site e, janela
+    from eventos_site e
+    cross join janela
     where e.created_at >= janela.desde and e.tipo in ('sessao', 'whatsapp')
     group by e.origem
   ),
   local_stats as (
     select e.local, count(*) as cliques
-    from eventos_site e, janela
+    from eventos_site e
+    cross join janela
     where e.tipo = 'whatsapp' and e.created_at >= janela.desde and e.local is not null
     group by e.local
     order by count(*) desc
   ),
   top_paginas as (
     select e.veiculo_id, v.modelo, m.nome as marca, v.slug, count(*) as paginas
-    from eventos_site e, janela
+    from eventos_site e
+    cross join janela
     join veiculos v on v.id = e.veiculo_id
     left join marcas m on m.id = v.marca_id
     where e.tipo = 'pagina' and e.created_at >= janela.desde and e.veiculo_id is not null
@@ -1143,7 +1146,8 @@ as $$
   ),
   top_cliques as (
     select e.veiculo_id, v.modelo, m.nome as marca, v.slug, count(*) as cliques
-    from eventos_site e, janela
+    from eventos_site e
+    cross join janela
     join veiculos v on v.id = e.veiculo_id
     left join marcas m on m.id = v.marca_id
     where e.tipo = 'whatsapp' and e.created_at >= janela.desde and e.veiculo_id is not null
@@ -1153,15 +1157,16 @@ as $$
   ),
   visitas_dia as (
     select date_trunc('day', e.created_at)::date as dia, count(*) as visitas
-    from eventos_site e, janela
+    from eventos_site e
+    cross join janela
     where e.tipo = 'sessao' and e.created_at >= janela.desde
     group by dia
     order by dia
   )
   select json_build_object(
     'periodo_dias', p_dias,
-    'total_visitas', (select count(*) from eventos_site e, janela where e.tipo = 'sessao' and e.created_at >= janela.desde),
-    'total_cliques_whatsapp', (select count(*) from eventos_site e, janela where e.tipo = 'whatsapp' and e.created_at >= janela.desde),
+    'total_visitas', (select count(*) from eventos_site e cross join janela where e.tipo = 'sessao' and e.created_at >= janela.desde),
+    'total_cliques_whatsapp', (select count(*) from eventos_site e cross join janela where e.tipo = 'whatsapp' and e.created_at >= janela.desde),
     'por_origem', coalesce((select json_agg(row_to_json(o)) from origem_stats o), '[]'::json),
     'cliques_por_local', coalesce((select json_agg(row_to_json(l)) from local_stats l), '[]'::json),
     'top_paginas', coalesce((select json_agg(row_to_json(tp)) from top_paginas tp), '[]'::json),
