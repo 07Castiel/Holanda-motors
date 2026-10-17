@@ -548,12 +548,12 @@
         <td class="td-interesse" title="${info.visualizacoes} visualizações · ${info.whatsapp} cliques em WhatsApp">${ICON_EYE_SMALL} ${info.visualizacoes} &nbsp; ${ICON_WPP_SMALL} ${info.whatsapp}</td>
         <td>
           <div class="actions">
-            <button class="btn-icon toggle" type="button" data-toggle="${v.id}" ${v.vendido ? 'disabled' : ''} aria-label="${v.ativo ? 'Ocultar do site' : 'Exibir no site'}">${v.ativo ? ICON_EYE_OFF : ICON_EYE}</button>
-            <button class="btn-icon" type="button" data-copylink="${v.id}" aria-label="Copiar link público de ${escapeHtml(v.make)} ${escapeHtml(v.model)}" title="Copiar link público">${ICON_LINK}</button>
-            ${podeExcluir ? `<button class="btn-icon del" type="button" data-del="${v.id}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="Excluir ${escapeHtml(v.make)} ${escapeHtml(v.model)}">${ICON_DEL}</button>` : ''}
-            <button class="btn-icon reserve ${v.reservado ? 'is-active' : ''}" type="button" data-reserve="${v.id}" data-reservado="${v.reservado ? '1' : '0'}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" ${v.vendido ? 'disabled' : ''} aria-label="${v.reservado ? 'Remover reserva' : 'Marcar como reservado'}">${ICON_BOOKMARK}</button>
-            <button class="btn-icon sold" type="button" data-sold="${v.id}" data-vendido="${v.vendido ? '1' : '0'}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="${v.vendido ? 'Reverter para disponível' : 'Marcar como vendido'}">${ICON_TAG}</button>
-            <button class="btn-icon edit" type="button" data-edit="${v.id}" aria-label="Editar ${escapeHtml(v.make)} ${escapeHtml(v.model)}">${ICON_EDIT}</button>
+            <button class="btn-icon toggle" type="button" data-toggle="${v.id}" ${v.vendido ? 'disabled' : ''} aria-label="${v.ativo ? 'Ocultar do site' : 'Exibir no site'}" data-tip="${v.vendido ? 'Indisponível: veículo vendido' : v.ativo ? 'Ocultar do site' : 'Exibir no site'}">${v.ativo ? ICON_EYE_OFF : ICON_EYE}</button>
+            <button class="btn-icon" type="button" data-copylink="${v.id}" aria-label="Copiar link público de ${escapeHtml(v.make)} ${escapeHtml(v.model)}" data-tip="Copiar link público">${ICON_LINK}</button>
+            ${podeExcluir ? `<button class="btn-icon del" type="button" data-del="${v.id}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="Excluir ${escapeHtml(v.make)} ${escapeHtml(v.model)}" data-tip="Excluir veículo">${ICON_DEL}</button>` : ''}
+            <button class="btn-icon reserve ${v.reservado ? 'is-active' : ''}" type="button" data-reserve="${v.id}" data-reservado="${v.reservado ? '1' : '0'}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" ${v.vendido ? 'disabled' : ''} aria-label="${v.reservado ? 'Remover reserva' : 'Marcar como reservado'}" data-tip="${v.vendido ? 'Indisponível: veículo vendido' : v.reservado ? 'Remover reserva' : 'Marcar como reservado'}">${ICON_BOOKMARK}</button>
+            <button class="btn-icon sold" type="button" data-sold="${v.id}" data-vendido="${v.vendido ? '1' : '0'}" data-label="${escapeHtml(v.make)} ${escapeHtml(v.model)}" aria-label="${v.vendido ? 'Reverter para disponível' : 'Marcar como vendido'}" data-tip="${v.vendido ? 'Reverter para disponível' : 'Marcar como vendido'}">${ICON_TAG}</button>
+            <button class="btn-icon edit" type="button" data-edit="${v.id}" aria-label="Editar ${escapeHtml(v.make)} ${escapeHtml(v.model)}" data-tip="Editar veículo">${ICON_EDIT}</button>
           </div>
         </td>
       </tr>`;
@@ -965,8 +965,8 @@
           <td><span class="badge ${consigStatusCls[c.status] || 'badge-seminovo'}">${consigStatusLabels[c.status] || c.status}</span></td>
           <td>
             <div class="actions">
-              <button class="btn-icon edit" type="button" data-cedit="${c.id}" aria-label="Editar consignação de ${escapeHtml(c.owner)}">${ICON_EDIT}</button>
-              ${podeExcluir ? `<button class="btn-icon del" type="button" data-cdel="${c.id}" data-label="consignação de ${escapeHtml(c.owner)}" aria-label="Excluir consignação de ${escapeHtml(c.owner)}">${ICON_DEL}</button>` : ''}
+              <button class="btn-icon edit" type="button" data-cedit="${c.id}" aria-label="Editar consignação de ${escapeHtml(c.owner)}" data-tip="Editar consignação">${ICON_EDIT}</button>
+              ${podeExcluir ? `<button class="btn-icon del" type="button" data-cdel="${c.id}" data-label="consignação de ${escapeHtml(c.owner)}" aria-label="Excluir consignação de ${escapeHtml(c.owner)}" data-tip="Excluir consignação">${ICON_DEL}</button>` : ''}
             </div>
           </td>
         </tr>
@@ -1266,7 +1266,7 @@
         <tr>
           <td>${escapeHtml(e.email)}</td>
           <td style="font-size:12px;color:var(--gray)">${new Date(e.created_at).toLocaleDateString('pt-BR')}</td>
-          <td><button class="btn-icon del" type="button" data-remove-email="${escapeHtml(e.email)}" aria-label="Remover autorização de ${escapeHtml(e.email)}">${ICON_DEL}</button></td>
+          <td><button class="btn-icon del" type="button" data-remove-email="${escapeHtml(e.email)}" aria-label="Remover autorização de ${escapeHtml(e.email)}" data-tip="Remover autorização">${ICON_DEL}</button></td>
         </tr>
       `).join('') : `<tr><td colspan="3"><div class="empty-state"><p>Nenhum e-mail autorizado ainda.</p></div></td></tr>`;
       tbody.querySelectorAll('[data-remove-email]').forEach(btn => btn.addEventListener('click', async () => {
@@ -1397,3 +1397,48 @@
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
 })();
+  /* ── TOOLTIP DOS BOTÕES DE AÇÃO ──
+   * Um único elemento em position:fixed no <body>: a .table-wrap tem
+   * overflow-x:auto e cortaria um tooltip feito só com CSS dentro da célula.
+   * Qualquer elemento com data-tip ganha o tooltip (mouse e foco por teclado).
+   * Fica aria-hidden porque o aria-label do botão já descreve a ação. */
+  const tooltipEl = document.createElement('div');
+  tooltipEl.className = 'hm-tooltip';
+  tooltipEl.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(tooltipEl);
+  let tooltipTarget = null;
+
+  function showTooltip(el) {
+    tooltipTarget = el;
+    tooltipEl.textContent = el.dataset.tip;
+    const r = el.getBoundingClientRect();
+    const t = tooltipEl.getBoundingClientRect();
+    const gap = 8;
+    let top = r.top - t.height - gap;
+    if (top < gap) top = r.bottom + gap; // sem espaço acima: mostra abaixo
+    const left = Math.max(gap, Math.min(r.left + r.width / 2 - t.width / 2, window.innerWidth - t.width - gap));
+    tooltipEl.style.top = `${top}px`;
+    tooltipEl.style.left = `${left}px`;
+    tooltipEl.classList.add('show');
+  }
+  function hideTooltip() {
+    tooltipTarget = null;
+    tooltipEl.classList.remove('show');
+  }
+
+  document.addEventListener('mouseover', e => {
+    const el = e.target.closest('[data-tip]');
+    if (el && el !== tooltipTarget) showTooltip(el);
+    else if (!el && tooltipTarget) hideTooltip();
+  });
+  // Só no foco visível (teclado): o foco devolvido por openModal/closeModal após um clique não deve abrir o tooltip.
+  document.addEventListener('focusin', e => {
+    const el = e.target.closest('[data-tip]');
+    if (el && el.matches(':focus-visible')) showTooltip(el);
+  });
+  document.addEventListener('focusout', hideTooltip);
+  // O clique quase sempre repinta a linha (o botão some do DOM sem disparar mouseout).
+  document.addEventListener('click', hideTooltip);
+  document.addEventListener('scroll', hideTooltip, true);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hideTooltip(); });
+
