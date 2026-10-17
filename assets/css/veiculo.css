@@ -1,0 +1,49 @@
+/**
+ * veiculo.css — só o que falta além de base.css/site.css para a página
+ * própria de cada veículo (função da Vercel em api/veiculo.js). Header,
+ * footer, botões, badges e o bloco de especificações (.modal-*) são os
+ * mesmos de base.css/site.css — aqui só entram o layout da página em si,
+ * a galeria e a breadcrumb, que não existiam antes.
+ *
+ * Sem JavaScript nesta página (fora o rastreio de visitas): a galeria
+ * mostra todas as fotos de uma vez, sem carrossel.
+ */
+
+/* header é "position: fixed" (site.css) — compensa a altura fixa aqui. */
+.veiculo-main { padding-top: 68px; }
+
+.veiculo-breadcrumb {
+  max-width: 1200px; margin: 0 auto; padding: 20px 40px 0;
+  font-size: 12px; color: var(--gray-light);
+}
+.veiculo-breadcrumb a { color: var(--gray-light); text-decoration: none; }
+.veiculo-breadcrumb a:hover, .veiculo-breadcrumb a:focus-visible { color: var(--white); }
+.veiculo-breadcrumb span[aria-current] { color: var(--white); }
+
+.veiculo-layout {
+  max-width: 1200px; margin: 0 auto; padding: 24px 40px 80px;
+  display: grid; grid-template-columns: 1.3fr 1fr; gap: 48px; align-items: start;
+}
+
+.veiculo-gallery { display: flex; flex-direction: column; gap: 10px; }
+.veiculo-gallery img { display: block; width: 100%; border-radius: 4px; background: var(--dark2); }
+.veiculo-gallery-principal { aspect-ratio: 4 / 3; object-fit: contain; }
+.veiculo-gallery-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 8px; }
+.veiculo-gallery-thumbs img { aspect-ratio: 1 / 1; object-fit: cover; }
+.veiculo-gallery-empty {
+  aspect-ratio: 4 / 3; background: var(--dark2); border-radius: 4px;
+  display: flex; align-items: center; justify-content: center; color: var(--gray); font-size: 13px;
+}
+
+.veiculo-desc { font-size: 13px; color: var(--gray-light); line-height: 1.6; margin: 4px 0 24px; white-space: pre-line; }
+
+.veiculo-actions { margin-top: 8px; }
+
+@media (max-width: 900px) {
+  .veiculo-layout { grid-template-columns: 1fr; padding: 20px 20px 60px; gap: 28px; }
+  .veiculo-breadcrumb { padding: 16px 20px 0; }
+}
+
+@media (max-width: 480px) {
+  .veiculo-gallery-thumbs { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); }
+}

@@ -57,6 +57,19 @@ const HM = (function () {
   }
 
   /**
+   * Link público de um veículo, no domínio da loja — usado pelo "Copiar
+   * link" e pelos cards do catálogo, para o Google conseguir indexar cada
+   * veículo (ver README → "Páginas de veículo e SEO"). Sem slug (veículo
+   * cadastrado antes da migração rodar, ou backfill ainda não aplicado),
+   * cai no link antigo (?veiculo=<id>), que continua funcionando.
+   */
+  function linkPublico(v) {
+    return v.slug
+      ? `https://www.holandamotors.com.br/veiculo/${v.slug}`
+      : `https://www.holandamotors.com.br/?veiculo=${encodeURIComponent(v.id)}`;
+  }
+
+  /**
    * Redimensiona (máx. 1600px no lado maior) e recomprime uma imagem para
    * JPEG antes do upload — reduz drasticamente o tamanho de fotos de
    * celular (que costumam vir com vários MB) e é o que evita o projeto
@@ -94,6 +107,7 @@ const HM = (function () {
     const principal = fotos.find(f => f.principal) || fotos[0];
     return {
       id: row.id,
+      slug: row.slug || '',
       tipo: row.categorias ? row.categorias.slug : null,
       make: row.marcas ? row.marcas.nome : '',
       model: row.modelo,
@@ -899,6 +913,19 @@ const HM = (function () {
     return resumo;
   }
 
+  /**
+   * Card "Desempenho do site" do dashboard (visitas, origem, cliques em
+   * WhatsApp) — tudo já agregado no banco pela RPC resumo_desempenho
+   * (supabase/schema.sql → PARTE 13), então nenhum limite de 1000 linhas do
+   * PostgREST entra em jogo aqui. RLS restringe a leitura de "eventos_site" a
+   * gerente/administrador — um vendedor autenticado recebe zeros, não erro.
+   */
+  async function getResumoDesempenho(dias = 30) {
+    const { data, error } = await supabaseClient.rpc('resumo_desempenho', { p_dias: dias });
+    if (error) throw error;
+    return data;
+  }
+
   /** Os N veículos com mais visualizações — para o "Mais vistos" do dashboard. */
   async function getMaisVistos(limite = 5) {
     const rows = unwrap(await supabaseClient.from('interacoes_veiculo').select('veiculo_id').eq('tipo', 'visualizacao'));
@@ -1131,6 +1158,7 @@ const HM = (function () {
     logInteresse,
     getInteresseVeiculos,
     getMaisVistos,
+    getResumoDesempenho,
     // migração idempotente a partir do localStorage
     importLegacyVehicle,
     importLegacyConsig,
@@ -1139,8 +1167,15 @@ const HM = (function () {
     restoreBackup,
     // utilitários
     wppLink,
+    linkPublico,
     formatKm,
     formatPrice,
     compressImage,
   };
 })();
+
+// Exposto em "window" (além da constante de módulo "HM" acima) para que
+// rastreio.js — carregado tanto aqui quanto, sozinho, na página de veículo —
+// consiga achar o mesmo objeto por window.HM nas duas situações (ver
+// assets/js/rastreio.js).
+window.HM = HM;
